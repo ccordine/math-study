@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"math/big"
 	"math/rand"
 	"net/http"
 	"os"
@@ -23,7 +24,7 @@ const slowThreshold = 3 * time.Second
 type Fact struct {
 	ID       string `json:"id"`
 	Prompt   string `json:"prompt"`
-	Answer   int    `json:"answer"`
+	Answer   string `json:"answer"`
 	Family   string `json:"family"`
 	Kind     string `json:"kind"`
 	A        int    `json:"a"`
@@ -52,21 +53,31 @@ type Trainer struct {
 	Progress Progress
 	Rand     *rand.Rand
 	Path     string
+	Mode     Mode
 }
 
 type Attempt struct {
 	ID     string `json:"id"`
-	Answer int    `json:"answer"`
+	Answer string `json:"answer"`
 	MS     int64  `json:"ms"`
 }
 
 type AttemptResult struct {
 	Correct bool      `json:"correct"`
 	Slow    bool      `json:"slow"`
-	Answer  int       `json:"answer"`
+	Answer  string    `json:"answer"`
 	Fact    Fact      `json:"fact"`
 	Stats   FactStats `json:"stats"`
 }
+
+type Mode string
+
+const (
+	ModeArithmetic  Mode = "arithmetic"
+	ModeFractions   Mode = "fractions"
+	ModePercentages Mode = "percentages"
+	ModeMixed       Mode = "mixed"
+)
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "web" {
@@ -80,15 +91,16 @@ func cliCmd(args []string) {
 	fs := flag.NewFlagSet("math-study", flag.ExitOnError)
 	min := fs.Int("min", 2, "smallest multiplication factor")
 	max := fs.Int("max", 12, "largest multiplication factor")
+	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, mixed")
 	minutes := fs.Int("minutes", 10, "session length in minutes")
 	progress := fs.String("progress", defaultProgressPath(), "progress JSON path")
 	_ = fs.Parse(args)
 
-	trainer := mustTrainer(*min, *max, *progress)
+	trainer := mustTrainer(*min, *max, parseMode(*mode), *progress)
 	reader := bufio.NewReader(os.Stdin)
 	deadline := time.Now().Add(time.Duration(*minutes) * time.Minute)
 
-	fmt.Printf("Math trainer: factors %d-%d, mixed multiplication/division. Type q to quit.\n", *min, *max)
+	fmt.Printf("Math trainer: %s mode. Type q to quit.\n", trainer.Mode)
 	for time.Now().Before(deadline) {
 		fact := trainer.NextFact()
 		start := time.Now()
@@ -98,19 +110,13 @@ func cliCmd(args []string) {
 		if strings.EqualFold(line, "q") || strings.EqualFold(line, "quit") {
 			break
 		}
-		answer, err := strconv.Atoi(line)
-		if err != nil {
-			fmt.Printf("Enter a number. Correct answer: %d\n", fact.Answer)
-			_ = trainer.Record(fact.ID, -1, time.Since(start))
-			continue
-		}
-		result := trainer.Record(fact.ID, answer, time.Since(start))
+		result := trainer.Record(fact.ID, line, time.Since(start))
 		if result.Correct && !result.Slow {
 			fmt.Println("correct")
 		} else if result.Correct {
 			fmt.Printf("correct, but slow (%0.1fs)\n", float64(time.Since(start).Milliseconds())/1000)
 		} else {
-			fmt.Printf("missed: %s = %d\n", fact.Prompt, fact.Answer)
+			fmt.Printf("missed: %s = %s\n", fact.Prompt, fact.Answer)
 		}
 	}
 
@@ -125,10 +131,11 @@ func webCmd(args []string) {
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
 	min := fs.Int("min", 2, "smallest multiplication factor")
 	max := fs.Int("max", 12, "largest multiplication factor")
+	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, mixed")
 	progress := fs.String("progress", defaultProgressPath(), "progress JSON path")
 	_ = fs.Parse(args)
 
-	trainer := mustTrainer(*min, *max, *progress)
+	trainer := mustTrainer(*min, *max, parseMode(*mode), *progress)
 	var mu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -176,19 +183,29 @@ func webCmd(args []string) {
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
-func mustTrainer(min, max int, path string) *Trainer {
+func mustTrainer(min, max int, mode Mode, path string) *Trainer {
 	if min < 1 || max < min {
 		log.Fatalf("invalid range: min=%d max=%d", min, max)
 	}
-	trainer, err := NewTrainer(min, max, path)
+	trainer, err := NewTrainer(min, max, mode, path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return trainer
 }
 
-func NewTrainer(min, max int, path string) (*Trainer, error) {
-	facts := BuildFacts(min, max)
+func parseMode(mode string) Mode {
+	switch Mode(strings.ToLower(strings.TrimSpace(mode))) {
+	case ModeArithmetic, ModeFractions, ModePercentages, ModeMixed:
+		return Mode(strings.ToLower(strings.TrimSpace(mode)))
+	default:
+		log.Fatalf("unknown mode %q; use arithmetic, fractions, percentages, or mixed", mode)
+		return ModeArithmetic
+	}
+}
+
+func NewTrainer(min, max int, mode Mode, path string) (*Trainer, error) {
+	facts := BuildFacts(min, max, mode)
 	progress, err := LoadProgress(path)
 	if err != nil {
 		return nil, err
@@ -203,10 +220,25 @@ func NewTrainer(min, max int, path string) (*Trainer, error) {
 		Progress: progress,
 		Rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
 		Path:     path,
+		Mode:     mode,
 	}, nil
 }
 
-func BuildFacts(min, max int) []Fact {
+func BuildFacts(min, max int, mode Mode) []Fact {
+	var facts []Fact
+	if mode == ModeArithmetic || mode == ModeMixed {
+		facts = append(facts, BuildArithmeticFacts(min, max)...)
+	}
+	if mode == ModeFractions || mode == ModeMixed {
+		facts = append(facts, BuildFractionFacts()...)
+	}
+	if mode == ModePercentages || mode == ModeMixed {
+		facts = append(facts, BuildPercentageFacts()...)
+	}
+	return uniqueFacts(facts)
+}
+
+func BuildArithmeticFacts(min, max int) []Fact {
 	var facts []Fact
 	for a := min; a <= max; a++ {
 		for b := a; b <= max; b++ {
@@ -216,7 +248,7 @@ func BuildFacts(min, max int) []Fact {
 				Fact{
 					ID:       fmt.Sprintf("mul:%d:%d", a, b),
 					Prompt:   fmt.Sprintf("%d x %d", a, b),
-					Answer:   product,
+					Answer:   strconv.Itoa(product),
 					Family:   family,
 					Kind:     "multiply",
 					A:        a,
@@ -227,7 +259,7 @@ func BuildFacts(min, max int) []Fact {
 				Fact{
 					ID:       fmt.Sprintf("mul:%d:%d", b, a),
 					Prompt:   fmt.Sprintf("%d x %d", b, a),
-					Answer:   product,
+					Answer:   strconv.Itoa(product),
 					Family:   family,
 					Kind:     "multiply",
 					A:        b,
@@ -238,7 +270,7 @@ func BuildFacts(min, max int) []Fact {
 				Fact{
 					ID:       fmt.Sprintf("div:%d:%d", product, a),
 					Prompt:   fmt.Sprintf("%d / %d", product, a),
-					Answer:   b,
+					Answer:   strconv.Itoa(b),
 					Family:   family,
 					Kind:     "divide",
 					A:        product,
@@ -249,7 +281,7 @@ func BuildFacts(min, max int) []Fact {
 				Fact{
 					ID:       fmt.Sprintf("div:%d:%d", product, b),
 					Prompt:   fmt.Sprintf("%d / %d", product, b),
-					Answer:   a,
+					Answer:   strconv.Itoa(a),
 					Family:   family,
 					Kind:     "divide",
 					A:        product,
@@ -260,7 +292,104 @@ func BuildFacts(min, max int) []Fact {
 			)
 		}
 	}
-	return uniqueFacts(facts)
+	return facts
+}
+
+func BuildFractionFacts() []Fact {
+	denominators := []int{2, 4, 5, 8, 10, 16}
+	var facts []Fact
+	for _, denominator := range denominators {
+		for numerator := 1; numerator < denominator; numerator++ {
+			if gcd(numerator, denominator) != 1 {
+				continue
+			}
+			decimal := decimalForFraction(numerator, denominator)
+			fraction := fmt.Sprintf("%d/%d", numerator, denominator)
+			family := fmt.Sprintf("%s=%s", fraction, decimal)
+			facts = append(facts,
+				Fact{
+					ID:       fmt.Sprintf("frac2dec:%d:%d", numerator, denominator),
+					Prompt:   fraction,
+					Answer:   decimal,
+					Family:   family,
+					Kind:     "fraction_to_decimal",
+					A:        numerator,
+					B:        denominator,
+					Operator: "/",
+				},
+				Fact{
+					ID:       fmt.Sprintf("dec2frac:%d:%d", numerator, denominator),
+					Prompt:   decimal,
+					Answer:   fraction,
+					Family:   family,
+					Kind:     "decimal_to_fraction",
+					A:        numerator,
+					B:        denominator,
+					Operator: "=",
+				},
+			)
+		}
+	}
+	return facts
+}
+
+func BuildPercentageFacts() []Fact {
+	denominators := []int{2, 4, 5, 8, 10, 16}
+	var facts []Fact
+	for _, denominator := range denominators {
+		for numerator := 1; numerator < denominator; numerator++ {
+			if gcd(numerator, denominator) != 1 {
+				continue
+			}
+			decimal := decimalForFraction(numerator, denominator)
+			fraction := fmt.Sprintf("%d/%d", numerator, denominator)
+			percent := percentForFraction(numerator, denominator)
+			family := fmt.Sprintf("%s=%s=%s", fraction, decimal, percent)
+			facts = append(facts,
+				Fact{
+					ID:       fmt.Sprintf("frac2pct:%d:%d", numerator, denominator),
+					Prompt:   fraction,
+					Answer:   percent,
+					Family:   family,
+					Kind:     "fraction_to_percent",
+					A:        numerator,
+					B:        denominator,
+					Operator: "%",
+				},
+				Fact{
+					ID:       fmt.Sprintf("pct2frac:%d:%d", numerator, denominator),
+					Prompt:   percent,
+					Answer:   fraction,
+					Family:   family,
+					Kind:     "percent_to_fraction",
+					A:        numerator,
+					B:        denominator,
+					Operator: "%",
+				},
+				Fact{
+					ID:       fmt.Sprintf("dec2pct:%d:%d", numerator, denominator),
+					Prompt:   decimal,
+					Answer:   percent,
+					Family:   family,
+					Kind:     "decimal_to_percent",
+					A:        numerator,
+					B:        denominator,
+					Operator: "%",
+				},
+				Fact{
+					ID:       fmt.Sprintf("pct2dec:%d:%d", numerator, denominator),
+					Prompt:   percent,
+					Answer:   decimal,
+					Family:   family,
+					Kind:     "percent_to_decimal",
+					A:        numerator,
+					B:        denominator,
+					Operator: "%",
+				},
+			)
+		}
+	}
+	return facts
 }
 
 func uniqueFacts(facts []Fact) []Fact {
@@ -342,14 +471,14 @@ func (t *Trainer) Weight(id string) int {
 	return max(1, weight)
 }
 
-func (t *Trainer) Record(id string, answer int, elapsed time.Duration) AttemptResult {
+func (t *Trainer) Record(id string, answer string, elapsed time.Duration) AttemptResult {
 	fact := t.ByID[id]
 	stats := t.Progress.Facts[id]
 	if stats == nil {
 		stats = &FactStats{}
 		t.Progress.Facts[id] = stats
 	}
-	correct := answer == fact.Answer
+	correct := answerMatches(fact, answer)
 	slow := elapsed > slowThreshold
 	stats.Seen++
 	stats.TotalMS += elapsed.Milliseconds()
@@ -364,6 +493,174 @@ func (t *Trainer) Record(id string, answer int, elapsed time.Duration) AttemptRe
 		stats.Misses++
 	}
 	return AttemptResult{Correct: correct, Slow: slow, Answer: fact.Answer, Fact: fact, Stats: *stats}
+}
+
+func answerMatches(fact Fact, answer string) bool {
+	answer = normalizeAnswer(answer)
+	if answer == "" {
+		return false
+	}
+	switch fact.Kind {
+	case "multiply", "divide":
+		return answer == normalizeAnswer(fact.Answer)
+	case "fraction_to_decimal":
+		return normalizeDecimal(answer) == normalizeDecimal(fact.Answer)
+	case "decimal_to_fraction":
+		gotN, gotD, ok := parseFraction(answer)
+		if !ok {
+			return false
+		}
+		wantN, wantD, ok := parseFraction(fact.Answer)
+		if !ok {
+			return false
+		}
+		return gotN == wantN && gotD == wantD
+	case "fraction_to_percent", "percent_to_fraction", "decimal_to_percent", "percent_to_decimal":
+		return equivalentValue(answer, fact.Answer, true)
+	default:
+		return answer == normalizeAnswer(fact.Answer)
+	}
+}
+
+func normalizeAnswer(answer string) string {
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	answer = strings.ReplaceAll(answer, " ", "")
+	if strings.HasPrefix(answer, "0.") {
+		answer = strings.TrimPrefix(answer, "0")
+	}
+	return answer
+}
+
+func normalizeDecimal(value string) string {
+	value = normalizeAnswer(value)
+	if strings.HasPrefix(value, ".") {
+		value = "0" + value
+	}
+	if !strings.Contains(value, ".") {
+		return value
+	}
+	value = strings.TrimRight(value, "0")
+	value = strings.TrimRight(value, ".")
+	if strings.HasPrefix(value, "0.") {
+		return strings.TrimPrefix(value, "0")
+	}
+	return value
+}
+
+func parseFraction(value string) (int, int, bool) {
+	value = normalizeAnswer(value)
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	numerator, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	denominator, err := strconv.Atoi(parts[1])
+	if err != nil || denominator == 0 {
+		return 0, 0, false
+	}
+	divisor := gcd(abs(numerator), abs(denominator))
+	numerator /= divisor
+	denominator /= divisor
+	if denominator < 0 {
+		numerator *= -1
+		denominator *= -1
+	}
+	return numerator, denominator, true
+}
+
+func decimalForFraction(numerator, denominator int) string {
+	remainder := numerator % denominator
+	whole := numerator / denominator
+	if remainder == 0 {
+		return strconv.Itoa(whole)
+	}
+	digits := strings.Builder{}
+	for remainder != 0 {
+		remainder *= 10
+		digits.WriteString(strconv.Itoa(remainder / denominator))
+		remainder %= denominator
+	}
+	if whole == 0 {
+		return "." + digits.String()
+	}
+	return fmt.Sprintf("%d.%s", whole, digits.String())
+}
+
+func percentForFraction(numerator, denominator int) string {
+	return decimalForFraction(numerator*100, denominator) + "%"
+}
+
+func equivalentValue(answer, expected string, bareNumberMeansPercent bool) bool {
+	got, ok := parseValue(answer, bareNumberMeansPercent)
+	if !ok {
+		return false
+	}
+	want, ok := parseValue(expected, strings.HasSuffix(normalizeAnswer(expected), "%"))
+	if !ok {
+		return false
+	}
+	return got.Cmp(want) == 0
+}
+
+func parseValue(value string, bareNumberMeansPercent bool) (*big.Rat, bool) {
+	value = normalizeAnswer(value)
+	if value == "" {
+		return nil, false
+	}
+	if strings.HasSuffix(value, "%") {
+		rat, ok := parseNumberRat(strings.TrimSuffix(value, "%"))
+		if !ok {
+			return nil, false
+		}
+		return rat.Quo(rat, big.NewRat(100, 1)), true
+	}
+	if strings.Contains(value, "/") {
+		numerator, denominator, ok := parseFraction(value)
+		if !ok {
+			return nil, false
+		}
+		return big.NewRat(int64(numerator), int64(denominator)), true
+	}
+	rat, ok := parseNumberRat(value)
+	if !ok {
+		return nil, false
+	}
+	if bareNumberMeansPercent && rat.Cmp(big.NewRat(1, 1)) >= 0 {
+		return rat.Quo(rat, big.NewRat(100, 1)), true
+	}
+	return rat, true
+}
+
+func parseNumberRat(value string) (*big.Rat, bool) {
+	value = normalizeDecimal(value)
+	if strings.HasPrefix(value, ".") {
+		value = "0" + value
+	}
+	if value == "" {
+		return nil, false
+	}
+	rat, ok := new(big.Rat).SetString(value)
+	return rat, ok
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 type FactSummary struct {
@@ -489,7 +786,7 @@ button { border: 0; border-radius: 8px; background: #1d4f91; color: white; paddi
     <h1>Arithmetic Trainer</h1>
     <div id="problem" class="problem">...</div>
     <form id="form" autocomplete="off">
-      <input id="answer" name="answer" inputmode="numeric" pattern="[0-9]*" autofocus>
+      <input id="answer" name="answer" inputmode="decimal" autofocus>
       <button>Check</button>
     </form>
     <div id="feedback" class="feedback"></div>
@@ -541,8 +838,8 @@ async function summary() {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!current) return;
-  const value = parseInt(answer.value, 10);
-  if (Number.isNaN(value)) return;
+  const value = answer.value.trim();
+  if (!value) return;
   const ms = Math.round(performance.now() - started);
   const res = await fetch("/api/attempt", {
     method: "POST",
