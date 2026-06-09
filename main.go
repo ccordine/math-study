@@ -2480,7 +2480,7 @@ func (t *Trainer) NextFact() Fact {
 
 func (t *Trainer) pickFactAvoidingRecent() Fact {
 	recent := map[string]bool{}
-	for _, id := range t.RecentFactIDs {
+	for _, id := range t.recentFactIDsForCooldown() {
 		recent[id] = true
 	}
 	fact, ok := t.pickWeightedFact(func(candidate Fact) bool {
@@ -2538,7 +2538,15 @@ func (t *Trainer) recentFactLimit() int {
 	if len(t.Facts) <= 1 {
 		return 0
 	}
-	return min(3, len(t.Facts)-1)
+	return min(3, max(1, len(t.Facts)/2))
+}
+
+func (t *Trainer) recentFactIDsForCooldown() []string {
+	limit := t.recentFactLimit()
+	if limit == 0 || len(t.RecentFactIDs) <= limit {
+		return t.RecentFactIDs
+	}
+	return t.RecentFactIDs[len(t.RecentFactIDs)-limit:]
 }
 
 func (t *Trainer) Weight(id string) int {

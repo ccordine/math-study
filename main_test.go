@@ -3,6 +3,7 @@ package main
 import (
 	"math/rand"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,16 +79,42 @@ func TestNextFactAvoidsRecentFacts(t *testing.T) {
 			"a": {Seen: 1, Misses: 20, Wrong: 20},
 		}},
 		Rand:          rand.New(rand.NewSource(1)),
-		RecentFactIDs: []string{"a", "b", "c"},
+		RecentFactIDs: []string{"b", "c"},
 	}
 
 	fact := trainer.NextFact()
-	if fact.ID != "d" {
-		t.Fatalf("NextFact picked %s, want only non-recent fact d", fact.ID)
+	if fact.ID == "b" || fact.ID == "c" {
+		t.Fatalf("NextFact picked recent fact %s", fact.ID)
 	}
-	wantRecent := []string{"b", "c", "d"}
-	if strings.Join(trainer.RecentFactIDs, ",") != strings.Join(wantRecent, ",") {
-		t.Fatalf("recent facts = %#v, want %#v", trainer.RecentFactIDs, wantRecent)
+	if len(trainer.RecentFactIDs) != 2 {
+		t.Fatalf("recent facts = %#v, want cooldown length 2", trainer.RecentFactIDs)
+	}
+	if trainer.RecentFactIDs[len(trainer.RecentFactIDs)-1] != fact.ID {
+		t.Fatalf("recent facts = %#v, want selected fact recorded", trainer.RecentFactIDs)
+	}
+}
+
+func TestRecentFactLimitLeavesAlternativesInSmallDecks(t *testing.T) {
+	cases := []struct {
+		count int
+		want  int
+	}{
+		{count: 1, want: 0},
+		{count: 2, want: 1},
+		{count: 3, want: 1},
+		{count: 4, want: 2},
+		{count: 5, want: 2},
+		{count: 6, want: 3},
+		{count: 20, want: 3},
+	}
+	for _, tc := range cases {
+		trainer := &Trainer{}
+		for i := 0; i < tc.count; i++ {
+			trainer.Facts = append(trainer.Facts, Fact{ID: strconv.Itoa(i)})
+		}
+		if got := trainer.recentFactLimit(); got != tc.want {
+			t.Fatalf("recent limit for %d facts = %d, want %d", tc.count, got, tc.want)
+		}
 	}
 }
 
