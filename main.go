@@ -73,16 +73,56 @@ type AttemptResult struct {
 }
 
 type Mode string
+type UnitCircleLesson string
+type AlgebraIdentityLesson string
+type TriangleLesson string
+
+type LessonSelection struct {
+	UnitCircle        UnitCircleLesson
+	AlgebraIdentities AlgebraIdentityLesson
+	Triangles         TriangleLesson
+}
 
 const (
-	ModeArithmetic       Mode = "arithmetic"
-	ModeFractions        Mode = "fractions"
-	ModePercentages      Mode = "percentages"
-	ModePercentRelations Mode = "percent-relations"
-	ModeUnitCircle       Mode = "unit-circle"
-	ModeExponentsLogs    Mode = "exponents-logs"
-	ModeRelationships    Mode = "relationships"
-	ModeMixed            Mode = "mixed"
+	ModeArithmetic        Mode = "arithmetic"
+	ModeFractions         Mode = "fractions"
+	ModePercentages       Mode = "percentages"
+	ModePercentRelations  Mode = "percent-relations"
+	ModeUnitCircle        Mode = "unit-circle"
+	ModeExponentsLogs     Mode = "exponents-logs"
+	ModeAlgebraIdentities Mode = "algebra-identities"
+	ModeTriangles         Mode = "triangles"
+	ModeRelationships     Mode = "relationships"
+	ModeMixed             Mode = "mixed"
+)
+
+const (
+	UnitCircleLessonConcepts        UnitCircleLesson = "concepts"
+	UnitCircleLessonQuadrants       UnitCircleLesson = "quadrants"
+	UnitCircleLessonReferenceAngles UnitCircleLesson = "reference-angles"
+	UnitCircleLessonReferenceValues UnitCircleLesson = "reference-values"
+	UnitCircleLessonRadians         UnitCircleLesson = "radians"
+	UnitCircleLessonAssemble        UnitCircleLesson = "assemble"
+	UnitCircleLessonTangent         UnitCircleLesson = "tangent"
+	UnitCircleLessonReciprocals     UnitCircleLesson = "reciprocals"
+	UnitCircleLessonMixed           UnitCircleLesson = "mixed"
+)
+
+const (
+	AlgebraIdentityLessonConcepts  AlgebraIdentityLesson = "concepts"
+	AlgebraIdentityLessonExpand    AlgebraIdentityLesson = "expand"
+	AlgebraIdentityLessonFactor    AlgebraIdentityLesson = "factor"
+	AlgebraIdentityLessonRecognize AlgebraIdentityLesson = "recognize"
+	AlgebraIdentityLessonMixed     AlgebraIdentityLesson = "mixed"
+)
+
+const (
+	TriangleLessonConcepts    TriangleLesson = "concepts"
+	TriangleLessonAngleSum    TriangleLesson = "angle-sum"
+	TriangleLessonPythagorean TriangleLesson = "pythagorean"
+	TriangleLessonSpecial     TriangleLesson = "special-right"
+	TriangleLessonSOHCAHTOA   TriangleLesson = "sohcahtoa"
+	TriangleLessonMixed       TriangleLesson = "mixed"
 )
 
 func main() {
@@ -97,12 +137,15 @@ func cliCmd(args []string) {
 	fs := flag.NewFlagSet("math-study", flag.ExitOnError)
 	min := fs.Int("min", 2, "smallest multiplication factor")
 	max := fs.Int("max", 12, "largest multiplication factor")
-	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, relationships, mixed")
+	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, algebra-identities, triangles, relationships, mixed")
+	lesson := fs.String("lesson", string(UnitCircleLessonConcepts), "lesson for unit-circle, algebra-identities, or triangles")
 	minutes := fs.Int("minutes", 10, "session length in minutes")
 	progress := fs.String("progress", defaultProgressPath(), "progress JSON path")
 	_ = fs.Parse(args)
 
-	trainer := mustTrainer(*min, *max, parseMode(*mode), *progress)
+	parsedMode := parseMode(*mode)
+	parsedLessons := lessonsForMode(parsedMode, *lesson)
+	trainer := mustTrainer(*min, *max, parsedMode, parsedLessons, *progress)
 	reader := bufio.NewReader(os.Stdin)
 	deadline := time.Now().Add(time.Duration(*minutes) * time.Minute)
 
@@ -140,11 +183,14 @@ func webCmd(args []string) {
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
 	min := fs.Int("min", 2, "smallest multiplication factor")
 	max := fs.Int("max", 12, "largest multiplication factor")
-	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, relationships, mixed")
+	mode := fs.String("mode", string(ModeArithmetic), "practice mode: arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, algebra-identities, triangles, relationships, mixed")
+	lesson := fs.String("lesson", string(UnitCircleLessonConcepts), "lesson for unit-circle, algebra-identities, or triangles")
 	progress := fs.String("progress", defaultProgressPath(), "progress JSON path")
 	_ = fs.Parse(args)
 
-	trainer := mustTrainer(*min, *max, parseMode(*mode), *progress)
+	parsedMode := parseMode(*mode)
+	parsedLessons := lessonsForMode(parsedMode, *lesson)
+	trainer := mustTrainer(*min, *max, parsedMode, parsedLessons, *progress)
 	var mu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -192,11 +238,11 @@ func webCmd(args []string) {
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
-func mustTrainer(min, max int, mode Mode, path string) *Trainer {
+func mustTrainer(min, max int, mode Mode, lessons LessonSelection, path string) *Trainer {
 	if min < 1 || max < min {
 		log.Fatalf("invalid range: min=%d max=%d", min, max)
 	}
-	trainer, err := NewTrainer(min, max, mode, path)
+	trainer, err := NewTrainerWithLessons(min, max, mode, lessons, path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -205,7 +251,7 @@ func mustTrainer(min, max int, mode Mode, path string) *Trainer {
 
 func parseMode(mode string) Mode {
 	switch Mode(strings.ToLower(strings.TrimSpace(mode))) {
-	case ModeArithmetic, ModeFractions, ModePercentages, ModePercentRelations, ModeUnitCircle, ModeExponentsLogs, ModeRelationships, ModeMixed:
+	case ModeArithmetic, ModeFractions, ModePercentages, ModePercentRelations, ModeUnitCircle, ModeExponentsLogs, ModeAlgebraIdentities, ModeTriangles, ModeRelationships, ModeMixed:
 		return Mode(strings.ToLower(strings.TrimSpace(mode)))
 	case "fraction-relations", "fraction-relationships":
 		return ModeFractions
@@ -215,18 +261,127 @@ func parseMode(mode string) Mode {
 		return ModePercentRelations
 	case "unitcircle", "circle", "trig", "trigonometry":
 		return ModeUnitCircle
-	case "exponents", "exponent", "logs", "log", "logarithms", "logarithm", "exponent-logs", "exponentslogs", "log-relations", "exponent-relations":
+	case "exponents", "exponent", "logs", "log", "logarithms", "logarithm", "exponent-logs", "exponentslogs", "log-relations", "exponent-relations", "roots-exponents-logs", "root-exponent-log", "root-exponent-logs", "root-log-relations":
 		return ModeExponentsLogs
+	case "identities", "algebra-patterns":
+		return ModeAlgebraIdentities
+	case "geometry-triangles", "trig-triangles":
+		return ModeTriangles
 	case "relations", "math-relations", "math-relationships", "relationship-trainer":
 		return ModeRelationships
 	default:
-		log.Fatalf("unknown mode %q; use arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, relationships, or mixed", mode)
+		log.Fatalf("unknown mode %q; use arithmetic, fractions, percentages, percent-relations, unit-circle, exponents-logs, algebra-identities, triangles, relationships, or mixed", mode)
 		return ModeArithmetic
 	}
 }
 
+func lessonForMode(mode Mode, lesson string) UnitCircleLesson {
+	if mode != ModeUnitCircle {
+		return UnitCircleLessonMixed
+	}
+	return parseUnitCircleLesson(lesson)
+}
+
+func lessonsForMode(mode Mode, lesson string) LessonSelection {
+	return LessonSelection{
+		UnitCircle:        lessonForMode(mode, lesson),
+		AlgebraIdentities: algebraIdentityLessonForMode(mode, lesson),
+		Triangles:         triangleLessonForMode(mode, lesson),
+	}
+}
+
+func algebraIdentityLessonForMode(mode Mode, lesson string) AlgebraIdentityLesson {
+	if mode != ModeAlgebraIdentities {
+		return AlgebraIdentityLessonMixed
+	}
+	return parseAlgebraIdentityLesson(lesson)
+}
+
+func triangleLessonForMode(mode Mode, lesson string) TriangleLesson {
+	if mode != ModeTriangles {
+		return TriangleLessonMixed
+	}
+	return parseTriangleLesson(lesson)
+}
+
+func parseUnitCircleLesson(lesson string) UnitCircleLesson {
+	switch UnitCircleLesson(strings.ToLower(strings.TrimSpace(lesson))) {
+	case "", UnitCircleLessonConcepts:
+		return UnitCircleLessonConcepts
+	case UnitCircleLessonQuadrants:
+		return UnitCircleLessonQuadrants
+	case UnitCircleLessonReferenceAngles:
+		return UnitCircleLessonReferenceAngles
+	case UnitCircleLessonReferenceValues:
+		return UnitCircleLessonReferenceValues
+	case UnitCircleLessonRadians:
+		return UnitCircleLessonRadians
+	case UnitCircleLessonAssemble:
+		return UnitCircleLessonAssemble
+	case UnitCircleLessonTangent:
+		return UnitCircleLessonTangent
+	case UnitCircleLessonReciprocals:
+		return UnitCircleLessonReciprocals
+	case UnitCircleLessonMixed:
+		return UnitCircleLessonMixed
+	default:
+		log.Fatalf("unknown unit-circle lesson %q; use concepts, quadrants, reference-angles, reference-values, radians, assemble, tangent, reciprocals, or mixed", lesson)
+		return UnitCircleLessonConcepts
+	}
+}
+
+func parseAlgebraIdentityLesson(lesson string) AlgebraIdentityLesson {
+	switch AlgebraIdentityLesson(strings.ToLower(strings.TrimSpace(lesson))) {
+	case "", AlgebraIdentityLessonConcepts:
+		return AlgebraIdentityLessonConcepts
+	case AlgebraIdentityLessonExpand:
+		return AlgebraIdentityLessonExpand
+	case AlgebraIdentityLessonFactor:
+		return AlgebraIdentityLessonFactor
+	case AlgebraIdentityLessonRecognize:
+		return AlgebraIdentityLessonRecognize
+	case AlgebraIdentityLessonMixed:
+		return AlgebraIdentityLessonMixed
+	default:
+		log.Fatalf("unknown algebra-identities lesson %q; use concepts, expand, factor, recognize, or mixed", lesson)
+		return AlgebraIdentityLessonConcepts
+	}
+}
+
+func parseTriangleLesson(lesson string) TriangleLesson {
+	switch TriangleLesson(strings.ToLower(strings.TrimSpace(lesson))) {
+	case "", TriangleLessonConcepts:
+		return TriangleLessonConcepts
+	case TriangleLessonAngleSum:
+		return TriangleLessonAngleSum
+	case TriangleLessonPythagorean:
+		return TriangleLessonPythagorean
+	case TriangleLessonSpecial:
+		return TriangleLessonSpecial
+	case TriangleLessonSOHCAHTOA:
+		return TriangleLessonSOHCAHTOA
+	case TriangleLessonMixed:
+		return TriangleLessonMixed
+	default:
+		log.Fatalf("unknown triangles lesson %q; use concepts, angle-sum, pythagorean, special-right, sohcahtoa, or mixed", lesson)
+		return TriangleLessonConcepts
+	}
+}
+
 func NewTrainer(min, max int, mode Mode, path string) (*Trainer, error) {
-	facts := BuildFacts(min, max, mode)
+	return NewTrainerWithLesson(min, max, mode, UnitCircleLessonMixed, path)
+}
+
+func NewTrainerWithLesson(min, max int, mode Mode, lesson UnitCircleLesson, path string) (*Trainer, error) {
+	return NewTrainerWithLessons(min, max, mode, LessonSelection{
+		UnitCircle:        lesson,
+		AlgebraIdentities: AlgebraIdentityLessonMixed,
+		Triangles:         TriangleLessonMixed,
+	}, path)
+}
+
+func NewTrainerWithLessons(min, max int, mode Mode, lessons LessonSelection, path string) (*Trainer, error) {
+	facts := BuildFactsWithLessons(min, max, mode, lessons)
 	progress, err := LoadProgress(path)
 	if err != nil {
 		return nil, err
@@ -246,6 +401,18 @@ func NewTrainer(min, max int, mode Mode, path string) (*Trainer, error) {
 }
 
 func BuildFacts(min, max int, mode Mode) []Fact {
+	return BuildFactsWithLesson(min, max, mode, UnitCircleLessonMixed)
+}
+
+func BuildFactsWithLesson(min, max int, mode Mode, lesson UnitCircleLesson) []Fact {
+	return BuildFactsWithLessons(min, max, mode, LessonSelection{
+		UnitCircle:        lesson,
+		AlgebraIdentities: AlgebraIdentityLessonMixed,
+		Triangles:         TriangleLessonMixed,
+	})
+}
+
+func BuildFactsWithLessons(min, max int, mode Mode, lessons LessonSelection) []Fact {
 	var facts []Fact
 	if mode == ModeArithmetic || mode == ModeMixed {
 		facts = append(facts, BuildArithmeticFacts(min, max)...)
@@ -259,11 +426,23 @@ func BuildFacts(min, max int, mode Mode) []Fact {
 	if mode == ModePercentRelations || mode == ModeRelationships || mode == ModeMixed {
 		facts = append(facts, BuildPercentageRelationFacts()...)
 	}
-	if mode == ModeUnitCircle || mode == ModeRelationships || mode == ModeMixed {
+	if mode == ModeUnitCircle {
+		facts = append(facts, BuildUnitCircleLessonFacts(lessons.UnitCircle)...)
+	} else if mode == ModeRelationships || mode == ModeMixed {
 		facts = append(facts, BuildUnitCircleFacts()...)
 	}
 	if mode == ModeExponentsLogs || mode == ModeRelationships || mode == ModeMixed {
 		facts = append(facts, BuildExponentLogFacts()...)
+	}
+	if mode == ModeAlgebraIdentities {
+		facts = append(facts, BuildAlgebraIdentityLessonFacts(lessons.AlgebraIdentities)...)
+	} else if mode == ModeRelationships || mode == ModeMixed {
+		facts = append(facts, BuildAlgebraIdentityFacts()...)
+	}
+	if mode == ModeTriangles {
+		facts = append(facts, BuildTriangleLessonFacts(lessons.Triangles)...)
+	} else if mode == ModeRelationships || mode == ModeMixed {
+		facts = append(facts, BuildTriangleFacts()...)
 	}
 	return uniqueFacts(facts)
 }
@@ -629,7 +808,64 @@ func BuildUnitCircleFacts() []Fact {
 
 	facts = append(facts, unitCircleConceptFacts()...)
 	facts = append(facts, unitCircleReciprocalFacts(angles)...)
+	facts = append(facts, unitCircleAssembleFacts(angles)...)
+	facts = append(facts, unitCircleReciprocalAngleFacts(angles)...)
 	return facts
+}
+
+func BuildUnitCircleLessonFacts(lesson UnitCircleLesson) []Fact {
+	angles := unitCircleAngles()
+	switch lesson {
+	case UnitCircleLessonConcepts:
+		return unitCircleConceptFacts()
+	case UnitCircleLessonQuadrants:
+		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
+			return strings.HasPrefix(fact.ID, "uc:quadrant:") || strings.HasPrefix(fact.ID, "uc:sign:")
+		})
+	case UnitCircleLessonReferenceAngles:
+		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
+			return strings.HasPrefix(fact.ID, "uc:ref:") ||
+				strings.HasPrefix(fact.ID, "uc:ref-rad:") ||
+				strings.HasPrefix(fact.ID, "uc:quadrant:")
+		})
+	case UnitCircleLessonReferenceValues:
+		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
+			if fact.Kind != "unit_circle_value" || fact.Operator == "sec" || fact.Operator == "csc" || fact.Operator == "cot" {
+				return false
+			}
+			return endsWithAny(fact.ID, []string{":30", ":45", ":60"}) &&
+				(strings.HasPrefix(fact.ID, "uc:sin:") ||
+					strings.HasPrefix(fact.ID, "uc:cos:") ||
+					strings.HasPrefix(fact.ID, "uc:tan:"))
+		})
+	case UnitCircleLessonRadians:
+		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
+			return strings.HasPrefix(fact.ID, "uc:deg2rad:") || strings.HasPrefix(fact.ID, "uc:rad2deg:")
+		})
+	case UnitCircleLessonAssemble:
+		return unitCircleAssembleFacts(angles)
+	case UnitCircleLessonTangent:
+		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
+			return fact.Operator == "tan" &&
+				(strings.HasPrefix(fact.ID, "uc:concept:tan-") ||
+					strings.HasPrefix(fact.ID, "uc:sign:tan:") ||
+					strings.HasPrefix(fact.ID, "uc:tan:"))
+		})
+	case UnitCircleLessonReciprocals:
+		var facts []Fact
+		for _, fact := range unitCircleConceptFacts() {
+			if hasRelationshipTag(fact, "reciprocal-functions") {
+				facts = append(facts, fact)
+			}
+		}
+		facts = append(facts, unitCircleReciprocalFacts(angles)...)
+		facts = append(facts, unitCircleReciprocalAngleFacts(angles)...)
+		return uniqueFacts(facts)
+	case UnitCircleLessonMixed:
+		return BuildUnitCircleFacts()
+	default:
+		return unitCircleConceptFacts()
+	}
 }
 
 func unitCircleFact(id, prompt, answer, family, kind, operator, explanation string, tags ...string) Fact {
@@ -643,6 +879,34 @@ func unitCircleFact(id, prompt, answer, family, kind, operator, explanation stri
 		Kind:             kind,
 		Operator:         operator,
 	}
+}
+
+func filterFacts(facts []Fact, keep func(Fact) bool) []Fact {
+	var out []Fact
+	for _, fact := range facts {
+		if keep(fact) {
+			out = append(out, fact)
+		}
+	}
+	return uniqueFacts(out)
+}
+
+func hasRelationshipTag(fact Fact, tag string) bool {
+	for _, got := range fact.RelationshipTags {
+		if got == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func endsWithAny(value string, suffixes []string) bool {
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(value, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func unitCircleConceptFacts() []Fact {
@@ -695,6 +959,90 @@ func unitCircleReciprocalFacts(angles []UnitCircleAngle) []Fact {
 				explanation,
 				rel.Tags...,
 			))
+		}
+	}
+	return facts
+}
+
+func unitCircleAssembleFacts(angles []UnitCircleAngle) []Fact {
+	var facts []Fact
+	for _, angle := range angles {
+		quadrant, ok := quadrantForDegrees(angle.Degrees)
+		if !ok {
+			continue
+		}
+		refRadians := radiansForDegrees(referenceAngle(angle.Degrees))
+		family := fmt.Sprintf("assemble:%s:%s", refRadians, quadrant)
+		facts = append(facts,
+			unitCircleFact(
+				fmt.Sprintf("uc:assemble:sin:%d", angle.Degrees),
+				fmt.Sprintf("sin at reference angle %s in quadrant %s", refRadians, quadrant),
+				angle.Sin,
+				family,
+				"unit_circle_value",
+				"sin",
+				"Sine uses the reference-angle y-value, then applies the quadrant sign.",
+				"reference-angles",
+				"quadrant-signs",
+				"sin-is-y",
+			),
+			unitCircleFact(
+				fmt.Sprintf("uc:assemble:cos:%d", angle.Degrees),
+				fmt.Sprintf("cos at reference angle %s in quadrant %s", refRadians, quadrant),
+				angle.Cos,
+				family,
+				"unit_circle_value",
+				"cos",
+				"Cosine uses the reference-angle x-value, then applies the quadrant sign.",
+				"reference-angles",
+				"quadrant-signs",
+				"cos-is-x",
+			),
+		)
+	}
+	return facts
+}
+
+func unitCircleReciprocalAngleFacts(angles []UnitCircleAngle) []Fact {
+	var facts []Fact
+	for _, angle := range angles {
+		for _, rel := range []struct {
+			Function   string
+			Reciprocal string
+			Value      string
+			Tags       []string
+		}{
+			{Function: "sin", Reciprocal: "csc", Value: angle.Sin, Tags: []string{"reciprocal-functions", "sin-is-y"}},
+			{Function: "cos", Reciprocal: "sec", Value: angle.Cos, Tags: []string{"reciprocal-functions", "cos-is-x"}},
+			{Function: "tan", Reciprocal: "cot", Value: angle.Tan, Tags: []string{"reciprocal-functions", "tan-is-y-over-x"}},
+		} {
+			reciprocal, ok := reciprocalUnitCircleValue(rel.Value)
+			if !ok {
+				continue
+			}
+			explanation := fmt.Sprintf("%s(theta) = 1/%s(theta), so use the reciprocal of %s.", rel.Reciprocal, rel.Function, rel.Value)
+			facts = append(facts,
+				unitCircleFact(
+					fmt.Sprintf("uc:reciprocal-angle:%s:deg:%d", rel.Reciprocal, angle.Degrees),
+					fmt.Sprintf("%s(%d deg)", rel.Reciprocal, angle.Degrees),
+					reciprocal,
+					fmt.Sprintf("reciprocal-angle:%d", angle.Degrees),
+					"unit_circle_value",
+					rel.Reciprocal,
+					explanation,
+					rel.Tags...,
+				),
+				unitCircleFact(
+					fmt.Sprintf("uc:reciprocal-angle:%s:rad:%d", rel.Reciprocal, angle.Degrees),
+					fmt.Sprintf("%s(%s)", rel.Reciprocal, angle.Radians),
+					reciprocal,
+					fmt.Sprintf("reciprocal-angle:%d", angle.Degrees),
+					"unit_circle_value",
+					rel.Reciprocal,
+					explanation,
+					rel.Tags...,
+				),
+			)
 		}
 	}
 	return facts
@@ -865,6 +1213,11 @@ func BuildExponentLogFacts() []Fact {
 			exponentExpression := fmt.Sprintf("%d^%d=%s", base, exponent, value)
 			logExpression := fmt.Sprintf("log_%d(%s)=%d", base, value, exponent)
 			family := fmt.Sprintf("%s <=> %s", exponentExpression, logExpression)
+			rootExpression := ""
+			if exponent > 1 {
+				rootExpression = fmt.Sprintf("root_%d(%s)=%d", exponent, value, base)
+				family = fmt.Sprintf("%s <=> %s <=> %s", exponentExpression, logExpression, rootExpression)
+			}
 			facts = append(facts,
 				Fact{
 					ID:       fmt.Sprintf("exlog:pow:%d:%d", base, exponent),
@@ -955,6 +1308,63 @@ func BuildExponentLogFacts() []Fact {
 					Operator: "^",
 				},
 			)
+			if exponent > 1 {
+				explanation := fmt.Sprintf("The same relationship has three forms: %s, %s, and %s. The root form asks which base raised to %d gives %s.", exponentExpression, logExpression, rootExpression, exponent, value)
+				facts = append(facts,
+					Fact{
+						ID:               fmt.Sprintf("exlog:pow2root:%d:%d", base, exponent),
+						Prompt:           fmt.Sprintf("%s as root", exponentExpression),
+						Answer:           rootExpression,
+						Explanation:      explanation,
+						RelationshipTags: []string{"base-exponent-value", "root-exponent-log-equivalence", "exponential-form-to-root-form", "source-exponent", "target-root"},
+						Family:           family,
+						Kind:             "root_form",
+						A:                base,
+						B:                exponent,
+						Product:          magnitude,
+						Operator:         "root",
+					},
+					Fact{
+						ID:               fmt.Sprintf("exlog:log2root:%d:%d", base, exponent),
+						Prompt:           fmt.Sprintf("%s as root", logExpression),
+						Answer:           rootExpression,
+						Explanation:      explanation,
+						RelationshipTags: []string{"base-exponent-value", "root-exponent-log-equivalence", "logarithmic-form-to-root-form", "source-log", "target-root"},
+						Family:           family,
+						Kind:             "root_form",
+						A:                base,
+						B:                exponent,
+						Product:          magnitude,
+						Operator:         "root",
+					},
+					Fact{
+						ID:               fmt.Sprintf("exlog:root2pow:%d:%d", base, exponent),
+						Prompt:           fmt.Sprintf("%s as exponent", rootExpression),
+						Answer:           exponentExpression,
+						Explanation:      explanation,
+						RelationshipTags: []string{"base-exponent-value", "root-exponent-log-equivalence", "root-form-to-exponential-form", "source-root", "target-exponent"},
+						Family:           family,
+						Kind:             "log_exponent_form",
+						A:                base,
+						B:                exponent,
+						Product:          magnitude,
+						Operator:         "^",
+					},
+					Fact{
+						ID:               fmt.Sprintf("exlog:root2log:%d:%d", base, exponent),
+						Prompt:           fmt.Sprintf("%s as log", rootExpression),
+						Answer:           logExpression,
+						Explanation:      explanation,
+						RelationshipTags: []string{"base-exponent-value", "root-exponent-log-equivalence", "root-form-to-logarithmic-form", "source-root", "target-log"},
+						Family:           family,
+						Kind:             "exponent_log_form",
+						A:                base,
+						B:                exponent,
+						Product:          magnitude,
+						Operator:         "log",
+					},
+				)
+			}
 			if exponent != 0 {
 				facts = append(facts,
 					Fact{
@@ -1092,6 +1502,627 @@ func intPow(base, exponent int) int {
 	return result
 }
 
+type algebraIdentitySpec struct {
+	ID          string
+	Prompt      string
+	Answer      string
+	Family      string
+	Explanation string
+	Tags        []string
+	Kind        string
+	Operator    string
+}
+
+func BuildAlgebraIdentityFacts() []Fact {
+	var facts []Fact
+	facts = append(facts, algebraIdentityConceptFacts()...)
+	facts = append(facts, algebraIdentityExpandFacts()...)
+	facts = append(facts, algebraIdentityFactorFacts()...)
+	facts = append(facts, algebraIdentityRecognizeFacts()...)
+	facts = append(facts, algebraIdentityMixedExtraFacts()...)
+	return uniqueFacts(facts)
+}
+
+func BuildAlgebraIdentityLessonFacts(lesson AlgebraIdentityLesson) []Fact {
+	switch lesson {
+	case "", AlgebraIdentityLessonConcepts:
+		return uniqueFacts(algebraIdentityConceptFacts())
+	case AlgebraIdentityLessonExpand:
+		return uniqueFacts(algebraIdentityExpandFacts())
+	case AlgebraIdentityLessonFactor:
+		return uniqueFacts(algebraIdentityFactorFacts())
+	case AlgebraIdentityLessonRecognize:
+		return uniqueFacts(algebraIdentityRecognizeFacts())
+	case AlgebraIdentityLessonMixed:
+		return BuildAlgebraIdentityFacts()
+	default:
+		log.Fatalf("unknown algebra-identities lesson %q; use concepts, expand, factor, recognize, or mixed", lesson)
+		return algebraIdentityConceptFacts()
+	}
+}
+
+func algebraIdentityConceptFacts() []Fact {
+	return []Fact{
+		{
+			ID:               "algid:concept:identity",
+			Prompt:           "What does identity mean?",
+			Answer:           "true for all allowed values",
+			Explanation:      "An identity is a statement that remains true for every value where both sides are defined.",
+			RelationshipTags: algebraIdentityTags([]string{"algebra-vocabulary", "identity", "equivalent-expressions"}),
+			Family:           "algebra-identity-concepts",
+			Kind:             "algebra_identity_concept",
+			Operator:         "=",
+		},
+		{
+			ID:               "algid:concept:expand",
+			Prompt:           "What does expand mean?",
+			Answer:           "write as a sum of terms",
+			Explanation:      "Expanding rewrites a product or power by distributing multiplication into separate terms.",
+			RelationshipTags: algebraIdentityTags([]string{"algebra-vocabulary", "expand", "equivalent-expressions"}),
+			Family:           "algebra-identity-concepts",
+			Kind:             "algebra_identity_concept",
+			Operator:         "=",
+		},
+		{
+			ID:               "algid:concept:factor",
+			Prompt:           "What does factor mean?",
+			Answer:           "write as a product of factors",
+			Explanation:      "Factoring rewrites a sum or difference as multiplication of shared or patterned factors.",
+			RelationshipTags: algebraIdentityTags([]string{"algebra-vocabulary", "factor", "equivalent-expressions"}),
+			Family:           "algebra-identity-concepts",
+			Kind:             "algebra_identity_concept",
+			Operator:         "=",
+		},
+		{
+			ID:               "algid:concept:equivalent-expression",
+			Prompt:           "What does equivalent expression mean?",
+			Answer:           "same value for the same inputs",
+			Explanation:      "Equivalent expressions may look different, but they produce the same value for the same allowed inputs.",
+			RelationshipTags: algebraIdentityTags([]string{"algebra-vocabulary", "equivalent-expressions"}),
+			Family:           "algebra-identity-concepts",
+			Kind:             "algebra_identity_concept",
+			Operator:         "=",
+		},
+		{
+			ID:               "algid:concept:distribute",
+			Prompt:           "What does distribute mean?",
+			Answer:           "multiply into each term",
+			Explanation:      "Distributing applies multiplication to each term inside parentheses.",
+			RelationshipTags: algebraIdentityTags([]string{"algebra-vocabulary", "distribute", "distributive-property", "expand"}),
+			Family:           "algebra-identity-concepts",
+			Kind:             "algebra_identity_concept",
+			Operator:         "=",
+		},
+	}
+}
+
+func algebraIdentityExpandFacts() []Fact {
+	return algebraIdentityFactsFromSpecs([]algebraIdentitySpec{
+		{
+			ID:          "algid:expand:square-sum",
+			Prompt:      "expand (a+b)^2",
+			Answer:      "a^2+2ab+b^2",
+			Family:      "(a+b)^2=a^2+2ab+b^2",
+			Explanation: "Squaring a sum makes two square terms and the middle double-product term.",
+			Tags:        []string{"square-of-sum", "perfect-square-trinomial", "expand", "binomial-patterns"},
+		},
+		{
+			ID:          "algid:expand:square-difference",
+			Prompt:      "expand (a-b)^2",
+			Answer:      "a^2-2ab+b^2",
+			Family:      "(a-b)^2=a^2-2ab+b^2",
+			Explanation: "Squaring a difference keeps both square terms positive and makes the middle double-product term negative.",
+			Tags:        []string{"square-of-difference", "perfect-square-trinomial", "expand", "binomial-patterns"},
+		},
+		{
+			ID:          "algid:expand:difference-squares",
+			Prompt:      "expand (a+b)(a-b)",
+			Answer:      "a^2-b^2",
+			Family:      "(a+b)(a-b)=a^2-b^2",
+			Explanation: "Conjugates cancel the middle terms, leaving a difference of squares.",
+			Tags:        []string{"difference-of-squares", "expand", "conjugates"},
+		},
+		{
+			ID:          "algid:expand:x-times-sum",
+			Prompt:      "expand x(x+a)",
+			Answer:      "x^2+ax",
+			Family:      "x(x+a)=x^2+ax",
+			Explanation: "Distribute x into both terms inside the parentheses.",
+			Tags:        []string{"distributive-property", "expand", "factoring-common-factor"},
+		},
+		{
+			ID:          "algid:expand:distributive",
+			Prompt:      "expand a(b+c)",
+			Answer:      "ab+ac",
+			Family:      "a(b+c)=ab+ac",
+			Explanation: "Distribution multiplies the outside factor into each term inside the parentheses.",
+			Tags:        []string{"distributive-property", "expand", "factoring-common-factor"},
+		},
+		{
+			ID:          "algid:expand:distributive-difference",
+			Prompt:      "expand a(b-c)",
+			Answer:      "ab-ac",
+			Family:      "a(b-c)=ab-ac",
+			Explanation: "Distribution multiplies a into b and into -c, producing ab - ac.",
+			Tags:        []string{"distributive-property", "expand", "factoring-common-factor"},
+		},
+	})
+}
+
+func algebraIdentityFactorFacts() []Fact {
+	return algebraIdentityFactsFromSpecs([]algebraIdentitySpec{
+		{
+			ID:          "algid:factor:square-sum",
+			Prompt:      "factor a^2+2ab+b^2",
+			Answer:      "(a+b)^2",
+			Family:      "(a+b)^2=a^2+2ab+b^2",
+			Explanation: "A perfect-square trinomial has matching square terms and a positive middle double-product term.",
+			Tags:        []string{"square-of-sum", "perfect-square-trinomial", "factor", "binomial-patterns"},
+		},
+		{
+			ID:          "algid:factor:square-difference",
+			Prompt:      "factor a^2-2ab+b^2",
+			Answer:      "(a-b)^2",
+			Family:      "(a-b)^2=a^2-2ab+b^2",
+			Explanation: "A negative middle double-product term identifies the square of a difference.",
+			Tags:        []string{"square-of-difference", "perfect-square-trinomial", "factor", "binomial-patterns"},
+		},
+		{
+			ID:          "algid:factor:difference-squares",
+			Prompt:      "factor a^2-b^2",
+			Answer:      "(a+b)(a-b)",
+			Family:      "a^2-b^2=(a+b)(a-b)",
+			Explanation: "A difference of squares factors into conjugates.",
+			Tags:        []string{"difference-of-squares", "factor", "conjugates"},
+		},
+		{
+			ID:          "algid:factor:x-common-factor",
+			Prompt:      "factor x^2+ax",
+			Answer:      "x(x+a)",
+			Family:      "x(x+a)=x^2+ax",
+			Explanation: "Both terms share the factor x, so factor it out.",
+			Tags:        []string{"distributive-property", "factor", "factoring-common-factor"},
+		},
+	})
+}
+
+func algebraIdentityRecognizeFacts() []Fact {
+	return algebraIdentityFactsFromSpecs([]algebraIdentitySpec{
+		{
+			ID:          "algid:recognize:x2-minus-9",
+			Prompt:      "what pattern does x^2-9 match?",
+			Answer:      "difference of squares",
+			Family:      "pattern-recognition:difference-of-squares",
+			Explanation: "x^2 and 9 are both squares, and the expression subtracts one from the other.",
+			Tags:        []string{"recognize-patterns", "difference-of-squares"},
+			Kind:        "algebra_pattern_name",
+		},
+		{
+			ID:          "algid:recognize:x2-plus-6x-plus-9",
+			Prompt:      "what pattern does x^2+6x+9 match?",
+			Answer:      "perfect square trinomial",
+			Family:      "pattern-recognition:perfect-square-trinomial",
+			Explanation: "x^2 and 9 are square terms, and 6x is the middle double-product term.",
+			Tags:        []string{"recognize-patterns", "perfect-square-trinomial"},
+			Kind:        "algebra_pattern_name",
+		},
+		{
+			ID:          "algid:recognize:4x2-minus-25",
+			Prompt:      "what pattern does 4x^2-25 match?",
+			Answer:      "difference of squares",
+			Family:      "pattern-recognition:difference-of-squares",
+			Explanation: "4x^2 is (2x)^2 and 25 is 5^2, so this is a difference of squares.",
+			Tags:        []string{"recognize-patterns", "difference-of-squares"},
+			Kind:        "algebra_pattern_name",
+		},
+	})
+}
+
+func algebraIdentityMixedExtraFacts() []Fact {
+	return algebraIdentityFactsFromSpecs([]algebraIdentitySpec{
+		{
+			ID:          "algid:factor:sum-cubes",
+			Prompt:      "factor a^3+b^3",
+			Answer:      "(a+b)(a^2-ab+b^2)",
+			Family:      "a^3+b^3=(a+b)(a^2-ab+b^2)",
+			Explanation: "A sum of cubes factors with the same sign in the binomial and alternating signs in the trinomial.",
+			Tags:        []string{"sum-of-cubes", "factor", "cubic-patterns"},
+		},
+		{
+			ID:          "algid:factor:difference-cubes",
+			Prompt:      "factor a^3-b^3",
+			Answer:      "(a-b)(a^2+ab+b^2)",
+			Family:      "a^3-b^3=(a-b)(a^2+ab+b^2)",
+			Explanation: "A difference of cubes factors with the same sign in the binomial and positive middle term in the trinomial.",
+			Tags:        []string{"difference-of-cubes", "factor", "cubic-patterns"},
+		},
+		{
+			ID:          "algid:factor:common-factor-a",
+			Prompt:      "factor ab+ac",
+			Answer:      "a(b+c)",
+			Family:      "a(b+c)=ab+ac",
+			Explanation: "Both terms share the factor a, so factor it out.",
+			Tags:        []string{"distributive-property", "factor", "factoring-common-factor"},
+		},
+		{
+			ID:          "algid:factor:common-factor-x",
+			Prompt:      "factor xy+xz",
+			Answer:      "x(y+z)",
+			Family:      "x(y+z)=xy+xz",
+			Explanation: "Both terms share the factor x, so factor it out.",
+			Tags:        []string{"distributive-property", "factor", "factoring-common-factor"},
+		},
+		{
+			ID:          "algid:expand:binomial-product",
+			Prompt:      "expand (x+a)(x+b)",
+			Answer:      "x^2+(a+b)x+ab",
+			Family:      "(x+a)(x+b)=x^2+(a+b)x+ab",
+			Explanation: "The middle coefficient is the sum of the added terms; the constant term is their product.",
+			Tags:        []string{"binomial-product", "expand", "pattern-transformations"},
+		},
+		{
+			ID:          "algid:factor:binomial-product",
+			Prompt:      "factor x^2+(a+b)x+ab",
+			Answer:      "(x+a)(x+b)",
+			Family:      "(x+a)(x+b)=x^2+(a+b)x+ab",
+			Explanation: "This trinomial pattern reverses the product of two binomials with matching x terms.",
+			Tags:        []string{"binomial-product", "factor", "pattern-transformations"},
+		},
+		{
+			ID:          "algid:factor:numeric-difference-squares-9",
+			Prompt:      "factor x^2-9",
+			Answer:      "(x+3)(x-3)",
+			Family:      "x^2-9=(x+3)(x-3)",
+			Explanation: "x^2 is x squared and 9 is 3 squared, so this matches a^2-b^2=(a+b)(a-b).",
+			Tags:        []string{"difference-of-squares", "factor", "numeric-recognizer"},
+		},
+		{
+			ID:          "algid:factor:numeric-difference-squares-16",
+			Prompt:      "factor x^2-16",
+			Answer:      "(x+4)(x-4)",
+			Family:      "x^2-16=(x+4)(x-4)",
+			Explanation: "x^2 is x squared and 16 is 4 squared, so this matches a^2-b^2=(a+b)(a-b).",
+			Tags:        []string{"difference-of-squares", "factor", "numeric-recognizer"},
+		},
+		{
+			ID:          "algid:factor:numeric-perfect-square-plus",
+			Prompt:      "factor x^2+6x+9",
+			Answer:      "(x+3)^2",
+			Family:      "x^2+6x+9=(x+3)^2",
+			Explanation: "x^2 and 9 are square terms, and 6x is 2*x*3, so this is a perfect-square trinomial.",
+			Tags:        []string{"perfect-square-trinomial", "factor", "numeric-recognizer"},
+		},
+		{
+			ID:          "algid:factor:numeric-perfect-square-minus",
+			Prompt:      "factor x^2-10x+25",
+			Answer:      "(x-5)^2",
+			Family:      "x^2-10x+25=(x-5)^2",
+			Explanation: "x^2 and 25 are square terms, and -10x is -2*x*5, so this is a perfect-square trinomial.",
+			Tags:        []string{"perfect-square-trinomial", "factor", "numeric-recognizer"},
+		},
+	})
+}
+
+func algebraIdentityTags(tags []string) []string {
+	for _, tag := range tags {
+		if tag == "algebra-identity" {
+			return tags
+		}
+	}
+	out := make([]string, 0, len(tags)+1)
+	out = append(out, "algebra-identity")
+	return append(out, tags...)
+}
+
+func algebraIdentityFactsFromSpecs(specs []algebraIdentitySpec) []Fact {
+	facts := make([]Fact, 0, len(specs))
+	for _, spec := range specs {
+		kind := spec.Kind
+		if kind == "" {
+			kind = "algebra_identity"
+		}
+		operator := spec.Operator
+		if operator == "" {
+			operator = "="
+		}
+		facts = append(facts, Fact{
+			ID:               spec.ID,
+			Prompt:           spec.Prompt,
+			Answer:           spec.Answer,
+			Explanation:      spec.Explanation,
+			RelationshipTags: algebraIdentityTags(spec.Tags),
+			Family:           spec.Family,
+			Kind:             kind,
+			Operator:         operator,
+		})
+	}
+	return facts
+}
+
+func BuildTriangleFacts() []Fact {
+	facts := []Fact{
+		triangleFact(
+			"tri:concept:angle-sum",
+			"What do the angles in any triangle add up to?",
+			"180",
+			"triangle-angle-sum",
+			"exact_quantity",
+			"angle-sum",
+			"Every triangle has interior angles that sum to 180 degrees.",
+			"triangle-relationships", "angle-sum",
+		),
+		triangleFact(
+			"tri:concept:right-angle",
+			"A right triangle has one angle of how many degrees?",
+			"90",
+			"right-triangle-basics",
+			"exact_quantity",
+			"right-angle",
+			"A right triangle is defined by having exactly one 90-degree angle.",
+			"triangle-relationships", "right-triangle",
+		),
+		triangleFact(
+			"tri:concept:acute-complement",
+			"In a right triangle, the two acute angles add up to how many degrees?",
+			"90",
+			"right-triangle-basics",
+			"exact_quantity",
+			"angle-sum",
+			"The full triangle sums to 180 degrees, and the right angle uses 90 degrees, leaving 90 degrees for the two acute angles.",
+			"triangle-relationships", "right-triangle", "complementary-angles",
+		),
+		triangleFact(
+			"tri:angle-sum:missing:60:60",
+			"A triangle has angles 60 deg and 60 deg. What is the missing angle?",
+			"60",
+			"triangle-angle-sum",
+			"exact_quantity",
+			"angle-sum",
+			"Triangle angles sum to 180 degrees, so 180 - 60 - 60 = 60.",
+			"triangle-relationships", "angle-sum", "missing-angle",
+		),
+		triangleFact(
+			"tri:angle-sum:missing:30:90",
+			"A triangle has angles 30 deg and 90 deg. What is the missing angle?",
+			"60",
+			"triangle-angle-sum",
+			"exact_quantity",
+			"angle-sum",
+			"Triangle angles sum to 180 degrees, so 180 - 30 - 90 = 60.",
+			"triangle-relationships", "angle-sum", "missing-angle",
+		),
+		triangleFact(
+			"tri:angle-sum:missing:45:45",
+			"A triangle has angles 45 deg and 45 deg. What is the missing angle?",
+			"90",
+			"triangle-angle-sum",
+			"exact_quantity",
+			"angle-sum",
+			"Triangle angles sum to 180 degrees, so 180 - 45 - 45 = 90.",
+			"triangle-relationships", "angle-sum", "missing-angle",
+		),
+		triangleFact(
+			"tri:side:hypotenuse",
+			"In a right triangle, what is the side opposite the right angle called?",
+			"hypotenuse",
+			"right-triangle-side-names",
+			"triangle_term",
+			"side-name",
+			"The hypotenuse is across from the 90-degree angle and is the longest side.",
+			"triangle-relationships", "right-triangle", "opposite-adjacent-hypotenuse",
+		),
+		triangleFact(
+			"tri:side:opposite",
+			"Relative to an acute angle, what is the side across from that angle called?",
+			"opposite",
+			"right-triangle-side-names",
+			"triangle_term",
+			"side-name",
+			"The opposite side is across the triangle from the angle you are using.",
+			"triangle-relationships", "right-triangle", "opposite-adjacent-hypotenuse",
+		),
+		triangleFact(
+			"tri:side:adjacent",
+			"Relative to an acute angle, what is the leg that touches the angle called?",
+			"adjacent",
+			"right-triangle-side-names",
+			"triangle_term",
+			"side-name",
+			"The adjacent leg touches the angle you are using; the hypotenuse also touches it but is named separately.",
+			"triangle-relationships", "right-triangle", "opposite-adjacent-hypotenuse",
+		),
+		triangleFact(
+			"tri:pythagorean:formula",
+			"For right triangle legs a and b with hypotenuse c, what equation relates the sides?",
+			"a^2+b^2=c^2",
+			"pythagorean-theorem",
+			"triangle_formula",
+			"pythagorean",
+			"The squares on the legs add to the square on the hypotenuse.",
+			"triangle-relationships", "right-triangle", "pythagorean-theorem",
+		),
+		triangleFact(
+			"tri:pythagorean:3-4-5:hypotenuse",
+			"A right triangle has legs 3 and 4. What is the hypotenuse?",
+			"5",
+			"pythagorean-triples",
+			"exact_quantity",
+			"pythagorean",
+			"3^2 + 4^2 = 9 + 16 = 25, and sqrt(25) = 5.",
+			"triangle-relationships", "right-triangle", "pythagorean-theorem",
+		),
+		triangleFact(
+			"tri:pythagorean:5-12-13:leg",
+			"A right triangle has hypotenuse 13 and one leg 5. What is the other leg?",
+			"12",
+			"pythagorean-triples",
+			"exact_quantity",
+			"pythagorean",
+			"13^2 - 5^2 = 169 - 25 = 144, and sqrt(144) = 12.",
+			"triangle-relationships", "right-triangle", "pythagorean-theorem",
+		),
+		triangleFact(
+			"tri:special:45-45-90:ratio",
+			"What is the leg:leg:hypotenuse ratio in a 45-45-90 triangle?",
+			"1:1:sqrt(2)",
+			"special-right-triangles",
+			"triangle_ratio",
+			"ratio",
+			"A 45-45-90 triangle is isosceles, so the legs match and the hypotenuse is leg*sqrt(2).",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "45-45-90",
+		),
+		triangleFact(
+			"tri:special:30-60-90:ratio",
+			"What is the short-leg:long-leg:hypotenuse ratio in a 30-60-90 triangle?",
+			"1:sqrt(3):2",
+			"special-right-triangles",
+			"triangle_ratio",
+			"ratio",
+			"In a 30-60-90 triangle, the side opposite 30 degrees is the short leg, the side opposite 60 degrees is short*sqrt(3), and the hypotenuse is twice the short leg.",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "30-60-90",
+		),
+		triangleFact(
+			"tri:special:30-60-90:opposite-30",
+			"In a 30-60-90 triangle, the side opposite 30 degrees is which side?",
+			"short leg",
+			"special-right-triangles",
+			"triangle_term",
+			"side-name",
+			"The 30-degree angle is across from the shortest side.",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "30-60-90",
+		),
+		triangleFact(
+			"tri:special:30-60-90:opposite-60",
+			"In a 30-60-90 triangle, the side opposite 60 degrees is which side?",
+			"long leg",
+			"special-right-triangles",
+			"triangle_term",
+			"side-name",
+			"The 60-degree angle is across from the longer leg, whose length is short*sqrt(3).",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "30-60-90",
+		),
+		triangleFact(
+			"tri:special:45-45-90:hypotenuse-from-leg-5",
+			"In a 45-45-90 triangle with leg 5, what is the hypotenuse?",
+			"5sqrt(2)",
+			"special-right-triangles",
+			"triangle_length",
+			"ratio",
+			"A 45-45-90 triangle has ratio 1:1:sqrt(2), so the hypotenuse is 5sqrt(2).",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "45-45-90", "missing-side",
+		),
+		triangleFact(
+			"tri:special:30-60-90:hypotenuse-from-short-4",
+			"In a 30-60-90 triangle with short leg 4, what is the hypotenuse?",
+			"8",
+			"special-right-triangles",
+			"exact_quantity",
+			"ratio",
+			"A 30-60-90 triangle has ratio 1:sqrt(3):2, so the hypotenuse is twice the short leg.",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "30-60-90", "missing-side",
+		),
+		triangleFact(
+			"tri:special:30-60-90:long-from-short-4",
+			"In a 30-60-90 triangle with short leg 4, what is the long leg?",
+			"4sqrt(3)",
+			"special-right-triangles",
+			"triangle_length",
+			"ratio",
+			"A 30-60-90 triangle has ratio 1:sqrt(3):2, so the long leg is short*sqrt(3).",
+			"triangle-relationships", "right-triangle", "special-right-triangles", "30-60-90", "missing-side",
+		),
+		triangleFact(
+			"tri:trig:sin-ratio",
+			"In a right triangle, sin(theta) is what side ratio?",
+			"opposite/hypotenuse",
+			"right-triangle-trig-ratios",
+			"triangle_ratio",
+			"sin",
+			"Sine compares the side opposite theta to the hypotenuse.",
+			"triangle-relationships", "right-triangle", "trig-foundations", "sohcahtoa",
+		),
+		triangleFact(
+			"tri:trig:cos-ratio",
+			"In a right triangle, cos(theta) is what side ratio?",
+			"adjacent/hypotenuse",
+			"right-triangle-trig-ratios",
+			"triangle_ratio",
+			"cos",
+			"Cosine compares the side adjacent to theta to the hypotenuse.",
+			"triangle-relationships", "right-triangle", "trig-foundations", "sohcahtoa",
+		),
+		triangleFact(
+			"tri:trig:tan-ratio",
+			"In a right triangle, tan(theta) is what side ratio?",
+			"opposite/adjacent",
+			"right-triangle-trig-ratios",
+			"triangle_ratio",
+			"tan",
+			"Tangent compares the side opposite theta to the adjacent leg.",
+			"triangle-relationships", "right-triangle", "trig-foundations", "sohcahtoa",
+		),
+		triangleFact(
+			"tri:similar:side-ratios",
+			"In similar triangles, matching side ratios stay what?",
+			"proportional",
+			"similar-triangles",
+			"triangle_term",
+			"similarity",
+			"Similar triangles have equal matching angles, so corresponding side lengths scale by the same factor.",
+			"triangle-relationships", "similar-triangles", "scale-factor",
+		),
+	}
+	return uniqueFacts(facts)
+}
+
+func BuildTriangleLessonFacts(lesson TriangleLesson) []Fact {
+	switch lesson {
+	case "", TriangleLessonConcepts:
+		return filterFacts(BuildTriangleFacts(), func(fact Fact) bool {
+			switch fact.ID {
+			case "tri:concept:right-angle", "tri:side:hypotenuse", "tri:side:opposite", "tri:side:adjacent":
+				return true
+			default:
+				return false
+			}
+		})
+	case TriangleLessonAngleSum:
+		return filterFacts(BuildTriangleFacts(), func(fact Fact) bool {
+			return fact.Operator == "angle-sum"
+		})
+	case TriangleLessonPythagorean:
+		return filterFacts(BuildTriangleFacts(), func(fact Fact) bool {
+			return hasRelationshipTag(fact, "pythagorean-theorem")
+		})
+	case TriangleLessonSpecial:
+		return filterFacts(BuildTriangleFacts(), func(fact Fact) bool {
+			return hasRelationshipTag(fact, "special-right-triangles")
+		})
+	case TriangleLessonSOHCAHTOA:
+		return filterFacts(BuildTriangleFacts(), func(fact Fact) bool {
+			return hasRelationshipTag(fact, "sohcahtoa")
+		})
+	case TriangleLessonMixed:
+		return BuildTriangleFacts()
+	default:
+		log.Fatalf("unknown triangles lesson %q; use concepts, angle-sum, pythagorean, special-right, sohcahtoa, or mixed", lesson)
+		return BuildTriangleLessonFacts(TriangleLessonConcepts)
+	}
+}
+
+func triangleFact(id, prompt, answer, family, kind, operator, explanation string, tags ...string) Fact {
+	return Fact{
+		ID:               id,
+		Prompt:           prompt,
+		Answer:           answer,
+		Explanation:      explanation,
+		RelationshipTags: tags,
+		Family:           family,
+		Kind:             kind,
+		Operator:         operator,
+	}
+}
+
 func uniqueFacts(facts []Fact) []Fact {
 	seen := map[string]bool{}
 	out := make([]Fact, 0, len(facts))
@@ -1227,6 +2258,20 @@ func answerMatches(fact Fact, answer string) bool {
 		return logEquationsMatch(answer, fact.Answer)
 	case "log_exponent_form":
 		return exponentEquationsMatch(answer, fact.Answer)
+	case "root_form":
+		return rootEquationsMatch(answer, fact.Answer)
+	case "algebra_identity":
+		return normalizeAlgebraIdentity(answer) == normalizeAlgebraIdentity(fact.Answer)
+	case "algebra_identity_concept":
+		return algebraIdentityConceptMatches(answer, fact.Answer)
+	case "algebra_pattern_name":
+		return algebraPatternNamesMatch(answer, fact.Answer)
+	case "triangle_formula":
+		return triangleFormulasMatch(answer, fact.Answer)
+	case "triangle_ratio", "triangle_length":
+		return triangleRatiosMatch(answer, fact.Answer)
+	case "triangle_term":
+		return triangleTermsMatch(answer, fact.Answer)
 	case "exponent_log_role":
 		return exponentLogRolesMatch(answer, fact.Answer)
 	case "unit_circle_radian":
@@ -1263,6 +2308,129 @@ func normalizeAnswer(answer string) string {
 		answer = strings.TrimPrefix(answer, "0")
 	}
 	return answer
+}
+
+func normalizeAlgebraIdentity(answer string) string {
+	answer = normalizeAnswer(answer)
+	answer = strings.ReplaceAll(answer, "**", "^")
+	answer = strings.ReplaceAll(answer, "*", "")
+	return answer
+}
+
+func algebraIdentityConceptMatches(answer, expected string) bool {
+	got, ok := normalizeAlgebraIdentityConcept(answer)
+	if !ok {
+		return false
+	}
+	want, ok := normalizeAlgebraIdentityConcept(expected)
+	if !ok {
+		return false
+	}
+	return got == want
+}
+
+func normalizeAlgebraIdentityConcept(value string) (string, bool) {
+	value = normalizeAnswer(value)
+	value = strings.ReplaceAll(value, "-", "")
+	switch value {
+	case "identity", "alwaystrue", "trueforallvalues", "trueforallallowedvalues", "equationtrueforallvalues", "statementtrueforallvalues":
+		return "identity", true
+	case "expand", "expansion", "multiplyout", "writeasasumofterms", "rewriteasasumofterms", "sumofterms":
+		return "expand", true
+	case "factor", "factoring", "factorout", "writeasaproductoffactors", "rewriteasaproductoffactors", "productoffactors":
+		return "factor", true
+	case "distribute", "distribution", "distributive", "multiplyintoeachterm", "multiplytoeachterm", "applymultiplicationtoeachterm":
+		return "distribute", true
+	case "equivalent", "equivalentexpression", "equivalentexpressions", "samevalue", "samevalueforthesameinputs", "sameoutputforthesameinputs":
+		return "equivalent-expression", true
+	default:
+		return "", false
+	}
+}
+
+func algebraPatternNamesMatch(answer, expected string) bool {
+	got, ok := normalizeAlgebraPatternName(answer)
+	if !ok {
+		return false
+	}
+	want, ok := normalizeAlgebraPatternName(expected)
+	if !ok {
+		return false
+	}
+	return got == want
+}
+
+func normalizeAlgebraPatternName(value string) (string, bool) {
+	value = normalizeAnswer(value)
+	value = strings.ReplaceAll(value, "-", "")
+	switch value {
+	case "differenceofsquares", "diffofsquares":
+		return "difference-of-squares", true
+	case "perfectsquaretrinomial", "perfectsquare", "squaretrinomial":
+		return "perfect-square-trinomial", true
+	default:
+		if value == "" {
+			return "", false
+		}
+		return value, true
+	}
+}
+
+func triangleFormulasMatch(answer, expected string) bool {
+	return normalizeAlgebraIdentity(answer) == normalizeAlgebraIdentity(expected)
+}
+
+func triangleRatiosMatch(answer, expected string) bool {
+	got := normalizeTriangleRatio(answer)
+	want := normalizeTriangleRatio(expected)
+	return got != "" && got == want
+}
+
+func normalizeTriangleRatio(value string) string {
+	value = normalizeAnswer(value)
+	value = strings.ReplaceAll(value, "**", "^")
+	value = strings.ReplaceAll(value, "*", "")
+	value = strings.ReplaceAll(value, ",", ":")
+	value = strings.ReplaceAll(value, "over", "/")
+	value = strings.ReplaceAll(value, "hypotenuse", "hyp")
+	value = strings.ReplaceAll(value, "opposite", "opp")
+	value = strings.ReplaceAll(value, "adjacent", "adj")
+	value = strings.ReplaceAll(value, "sqrt(2)", "sqrt2")
+	value = strings.ReplaceAll(value, "sqrt(3)", "sqrt3")
+	return value
+}
+
+func triangleTermsMatch(answer, expected string) bool {
+	got, ok := normalizeTriangleTerm(answer)
+	if !ok {
+		return false
+	}
+	want, ok := normalizeTriangleTerm(expected)
+	if !ok {
+		return false
+	}
+	return got == want
+}
+
+func normalizeTriangleTerm(value string) (string, bool) {
+	value = normalizeAnswer(value)
+	value = strings.ReplaceAll(value, "-", "")
+	switch value {
+	case "hypotenuse", "hyp":
+		return "hypotenuse", true
+	case "opposite", "oppositeside":
+		return "opposite", true
+	case "adjacent", "adjacentside", "adjacentleg":
+		return "adjacent", true
+	case "shortleg", "shortside", "short":
+		return "short-leg", true
+	case "longleg", "longside", "long":
+		return "long-leg", true
+	case "proportional", "same", "equalratios", "sameratio", "sameratios":
+		return "proportional", true
+	default:
+		return "", false
+	}
 }
 
 func normalizeDecimal(value string) string {
@@ -1477,6 +2645,18 @@ func exponentEquationsMatch(answer, expected string) bool {
 	return exponentLogEquationsMatch(got, want)
 }
 
+func rootEquationsMatch(answer, expected string) bool {
+	got, ok := parseRootEquation(answer)
+	if !ok {
+		return false
+	}
+	want, ok := parseRootEquation(expected)
+	if !ok {
+		return false
+	}
+	return exponentLogEquationsMatch(got, want)
+}
+
 func exponentLogEquationsMatch(got, want ExponentLogEquation) bool {
 	return got.Base.Cmp(want.Base) == 0 &&
 		got.Exponent.Cmp(want.Exponent) == 0 &&
@@ -1568,6 +2748,81 @@ func parseExponentEquation(value string) (ExponentLogEquation, bool) {
 		return ExponentLogEquation{}, false
 	}
 	return ExponentLogEquation{Base: base, Exponent: exponent, Value: result}, true
+}
+
+func parseRootEquation(value string) (ExponentLogEquation, bool) {
+	value = normalizeAnswer(value)
+	parts := strings.Split(value, "=")
+	if len(parts) != 2 {
+		return ExponentLogEquation{}, false
+	}
+	indexText, radicandText, ok := parseRootLeft(parts[0])
+	if !ok {
+		return ExponentLogEquation{}, false
+	}
+	index, ok := parseExpressionQuantityRat(indexText)
+	if !ok {
+		return ExponentLogEquation{}, false
+	}
+	radicand, ok := parseExpressionQuantityRat(radicandText)
+	if !ok {
+		return ExponentLogEquation{}, false
+	}
+	result, ok := parseExpressionQuantityRat(parts[1])
+	if !ok {
+		return ExponentLogEquation{}, false
+	}
+	return ExponentLogEquation{Base: result, Exponent: index, Value: radicand}, true
+}
+
+func parseRootLeft(left string) (string, string, bool) {
+	if strings.HasPrefix(left, "sqrt(") {
+		radicand, ok := parenthesizedArgument(strings.TrimPrefix(left, "sqrt"))
+		return "2", radicand, ok
+	}
+	if strings.HasPrefix(left, "squareroot(") {
+		radicand, ok := parenthesizedArgument(strings.TrimPrefix(left, "squareroot"))
+		return "2", radicand, ok
+	}
+	if strings.HasPrefix(left, "cuberoot(") {
+		radicand, ok := parenthesizedArgument(strings.TrimPrefix(left, "cuberoot"))
+		return "3", radicand, ok
+	}
+	if strings.HasPrefix(left, "root") {
+		rest := strings.TrimPrefix(left, "root")
+		rest = strings.TrimPrefix(rest, "_")
+		open := strings.Index(rest, "(")
+		if open <= 0 {
+			return "", "", false
+		}
+		radicand, ok := parenthesizedArgument(rest[open:])
+		return rest[:open], radicand, ok
+	}
+	rootPos := strings.Index(left, "root(")
+	if rootPos <= 0 {
+		return "", "", false
+	}
+	indexText := stripOrdinalSuffix(left[:rootPos])
+	radicand, ok := parenthesizedArgument(left[rootPos+len("root"):])
+	return indexText, radicand, ok
+}
+
+func parenthesizedArgument(value string) (string, bool) {
+	open := strings.Index(value, "(")
+	close := strings.LastIndex(value, ")")
+	if open != 0 || close != len(value)-1 || close <= open+1 {
+		return "", false
+	}
+	return value[open+1 : close], true
+}
+
+func stripOrdinalSuffix(value string) string {
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(value, suffix) {
+			return strings.TrimSuffix(value, suffix)
+		}
+	}
+	return value
 }
 
 func parseExpressionQuantityRat(value string) (*big.Rat, bool) {

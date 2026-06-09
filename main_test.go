@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,14 @@ func TestRelationshipModeAliases(t *testing.T) {
 		"fraction-relations":       ModeFractions,
 		"percentage-relations":     ModePercentRelations,
 		"log-relations":            ModeExponentsLogs,
+		"root-exponent-log":        ModeExponentsLogs,
+		"roots-exponents-logs":     ModeExponentsLogs,
+		"algebra-identities":       ModeAlgebraIdentities,
+		"identities":               ModeAlgebraIdentities,
+		"algebra-patterns":         ModeAlgebraIdentities,
+		"triangles":                ModeTriangles,
+		"geometry-triangles":       ModeTriangles,
+		"trig-triangles":           ModeTriangles,
 		"relationship-trainer":     ModeRelationships,
 		"percentage-relationships": ModePercentRelations,
 	}
@@ -92,7 +101,7 @@ func TestRelationshipsModeExcludesArithmeticFacts(t *testing.T) {
 	if _, ok := byID["mul:2:2"]; ok {
 		t.Fatal("relationships mode should not include arithmetic facts")
 	}
-	for _, id := range []string{"frac2dec:1:2", "pctrel:20:35", "uc:concept:sin-y", "exlog:concept:log-asks-for"} {
+	for _, id := range []string{"frac2dec:1:2", "pctrel:20:35", "uc:concept:sin-y", "exlog:concept:log-asks-for", "algid:expand:square-sum", "tri:concept:angle-sum"} {
 		if _, ok := byID[id]; !ok {
 			t.Fatalf("relationships mode missing %s", id)
 		}
@@ -293,6 +302,551 @@ func TestBuildUnitCircleFactsIncludesCoreRelationships(t *testing.T) {
 	}
 }
 
+func TestUnitCircleLessonParsingAndDefault(t *testing.T) {
+	if got := lessonForMode(ModeUnitCircle, ""); got != UnitCircleLessonConcepts {
+		t.Fatalf("default unit-circle lesson = %q, want %q", got, UnitCircleLessonConcepts)
+	}
+	if got := lessonForMode(ModeFractions, "quadrants"); got != UnitCircleLessonMixed {
+		t.Fatalf("non-unit-circle lesson = %q, want ignored mixed lesson", got)
+	}
+	if got := parseUnitCircleLesson("reference-values"); got != UnitCircleLessonReferenceValues {
+		t.Fatalf("parse reference-values = %q", got)
+	}
+}
+
+func TestAlgebraIdentityLessonParsingAndDefault(t *testing.T) {
+	if got := algebraIdentityLessonForMode(ModeAlgebraIdentities, ""); got != AlgebraIdentityLessonConcepts {
+		t.Fatalf("default algebra-identities lesson = %q, want %q", got, AlgebraIdentityLessonConcepts)
+	}
+	if got := algebraIdentityLessonForMode(ModeFractions, "expand"); got != AlgebraIdentityLessonMixed {
+		t.Fatalf("non-algebra lesson = %q, want ignored mixed lesson", got)
+	}
+	if got := parseAlgebraIdentityLesson("recognize"); got != AlgebraIdentityLessonRecognize {
+		t.Fatalf("parse recognize = %q", got)
+	}
+	lessons := lessonsForMode(ModeAlgebraIdentities, "factor")
+	if lessons.UnitCircle != UnitCircleLessonMixed {
+		t.Fatalf("algebra mode unit-circle lesson = %q, want mixed", lessons.UnitCircle)
+	}
+	if lessons.AlgebraIdentities != AlgebraIdentityLessonFactor {
+		t.Fatalf("algebra mode lesson = %q, want factor", lessons.AlgebraIdentities)
+	}
+}
+
+func TestTriangleLessonParsingAndDefault(t *testing.T) {
+	if got := triangleLessonForMode(ModeTriangles, ""); got != TriangleLessonConcepts {
+		t.Fatalf("default triangles lesson = %q, want %q", got, TriangleLessonConcepts)
+	}
+	if got := triangleLessonForMode(ModeFractions, "pythagorean"); got != TriangleLessonMixed {
+		t.Fatalf("non-triangles lesson = %q, want ignored mixed lesson", got)
+	}
+	if got := parseTriangleLesson("special-right"); got != TriangleLessonSpecial {
+		t.Fatalf("parse special-right = %q", got)
+	}
+	lessons := lessonsForMode(ModeTriangles, "sohcahtoa")
+	if lessons.UnitCircle != UnitCircleLessonMixed {
+		t.Fatalf("triangles mode unit-circle lesson = %q, want mixed", lessons.UnitCircle)
+	}
+	if lessons.AlgebraIdentities != AlgebraIdentityLessonMixed {
+		t.Fatalf("triangles mode algebra lesson = %q, want mixed", lessons.AlgebraIdentities)
+	}
+	if lessons.Triangles != TriangleLessonSOHCAHTOA {
+		t.Fatalf("triangles mode lesson = %q, want sohcahtoa", lessons.Triangles)
+	}
+}
+
+func TestBuildFactsWithUnitCircleDefaultLessonUsesConcepts(t *testing.T) {
+	facts := BuildFactsWithLesson(2, 12, ModeUnitCircle, UnitCircleLessonConcepts)
+	if len(facts) == 0 {
+		t.Fatal("concepts lesson should return facts")
+	}
+	byID := map[string]Fact{}
+	for _, fact := range facts {
+		byID[fact.ID] = fact
+	}
+	if _, ok := byID["uc:concept:sin-y"]; !ok {
+		t.Fatal("concepts lesson should include sine-is-y concept")
+	}
+	for _, forbidden := range []string{"uc:sin:deg:120", "uc:cos:rad:330", "uc:tan:rad:45"} {
+		if _, ok := byID[forbidden]; ok {
+			t.Fatalf("concepts lesson should not include angle value fact %s", forbidden)
+		}
+	}
+	for _, fact := range facts {
+		if fact.Kind == "unit_circle_value" || strings.HasPrefix(fact.Prompt, "sin(") || strings.HasPrefix(fact.Prompt, "cos(") || strings.HasPrefix(fact.Prompt, "tan(") {
+			t.Fatalf("concepts lesson contains angle value prompt: %#v", fact)
+		}
+	}
+}
+
+func TestBuildFactsWithAlgebraIdentitiesDefaultLessonUsesConcepts(t *testing.T) {
+	facts := BuildFactsWithLessons(2, 12, ModeAlgebraIdentities, lessonsForMode(ModeAlgebraIdentities, ""))
+	if len(facts) == 0 {
+		t.Fatal("concepts lesson should return facts")
+	}
+	byID := factsByID(facts)
+	if _, ok := byID["algid:concept:identity"]; !ok {
+		t.Fatal("concepts lesson should include identity concept")
+	}
+	for _, forbidden := range []string{"algid:expand:square-sum", "algid:factor:square-sum", "algid:recognize:x2-minus-9"} {
+		if _, ok := byID[forbidden]; ok {
+			t.Fatalf("concepts lesson should not include %s", forbidden)
+		}
+	}
+	for _, fact := range facts {
+		if fact.Kind == "algebra_identity" || strings.HasPrefix(fact.Prompt, "expand ") || strings.HasPrefix(fact.Prompt, "factor ") {
+			t.Fatalf("concepts lesson contains transformation prompt: %#v", fact)
+		}
+	}
+}
+
+func TestBuildFactsWithTrianglesDefaultLessonUsesConcepts(t *testing.T) {
+	facts := BuildFactsWithLessons(2, 12, ModeTriangles, lessonsForMode(ModeTriangles, ""))
+	if len(facts) == 0 {
+		t.Fatal("concepts lesson should return facts")
+	}
+	byID := factsByID(facts)
+	for _, id := range []string{"tri:concept:right-angle", "tri:side:hypotenuse", "tri:side:opposite", "tri:side:adjacent"} {
+		if _, ok := byID[id]; !ok {
+			t.Fatalf("concepts lesson missing %s", id)
+		}
+	}
+	for _, forbidden := range []string{"tri:concept:angle-sum", "tri:angle-sum:missing:60:60", "tri:pythagorean:formula", "tri:special:30-60-90:ratio", "tri:trig:sin-ratio"} {
+		if _, ok := byID[forbidden]; ok {
+			t.Fatalf("concepts lesson should not include %s", forbidden)
+		}
+	}
+	for _, fact := range facts {
+		if fact.Operator == "angle-sum" || fact.Operator == "pythagorean" || fact.Operator == "sin" || fact.Operator == "cos" || fact.Operator == "tan" {
+			t.Fatalf("concepts lesson contains later relationship prompt: %#v", fact)
+		}
+	}
+}
+
+func TestBuildUnitCircleLessonFactsFiltersByStage(t *testing.T) {
+	cases := []struct {
+		lesson UnitCircleLesson
+		wantID string
+		check  func(*testing.T, []Fact)
+	}{
+		{
+			lesson: UnitCircleLessonConcepts,
+			wantID: "uc:concept:point-order",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "uc:concept:") {
+						t.Fatalf("concepts contains non-concept fact %s", fact.ID)
+					}
+					if fact.Kind == "unit_circle_value" {
+						t.Fatalf("concepts contains value fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonQuadrants,
+			wantID: "uc:sign:sin:iv",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if fact.Kind != "unit_circle_quadrant" && fact.Kind != "unit_circle_sign" {
+						t.Fatalf("quadrants contains %s kind %s", fact.ID, fact.Kind)
+					}
+					if strings.HasPrefix(fact.ID, "uc:ref-value:") {
+						t.Fatalf("quadrants should not contain exact trig values: %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonReferenceAngles,
+			wantID: "uc:ref-rad:330",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if fact.Kind == "unit_circle_value" {
+						t.Fatalf("reference-angles contains value fact %s", fact.ID)
+					}
+					if !(strings.HasPrefix(fact.ID, "uc:ref:") || strings.HasPrefix(fact.ID, "uc:ref-rad:") || strings.HasPrefix(fact.ID, "uc:quadrant:")) {
+						t.Fatalf("reference-angles contains unrelated fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonReferenceValues,
+			wantID: "uc:tan:rad:45",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if fact.Kind != "unit_circle_value" {
+						t.Fatalf("reference-values contains non-value fact %s", fact.ID)
+					}
+					if !endsWithAny(fact.ID, []string{":30", ":45", ":60"}) {
+						t.Fatalf("reference-values contains non-reference angle fact %s", fact.ID)
+					}
+					if strings.HasPrefix(fact.Answer, "-") {
+						t.Fatalf("reference-values contains negative answer %s = %s", fact.ID, fact.Answer)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonRadians,
+			wantID: "uc:deg2rad:330",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "uc:deg2rad:") && !strings.HasPrefix(fact.ID, "uc:rad2deg:") {
+						t.Fatalf("radians contains non-conversion fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonAssemble,
+			wantID: "uc:assemble:sin:330",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "uc:assemble:") {
+						t.Fatalf("assemble contains unrelated fact %s", fact.ID)
+					}
+					if fact.Operator == "tan" {
+						t.Fatalf("assemble should not contain tangent fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonTangent,
+			wantID: "uc:tan:deg:90",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if fact.Operator != "tan" {
+						t.Fatalf("tangent contains non-tangent fact %s operator %s", fact.ID, fact.Operator)
+					}
+					if strings.HasPrefix(fact.ID, "uc:ref-value-sin:") || strings.HasPrefix(fact.ID, "uc:ref-value-cos:") {
+						t.Fatalf("tangent contains sin/cos assemble fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonReciprocals,
+			wantID: "uc:reciprocal-angle:sec:deg:60",
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !hasTag(fact, "reciprocal-functions") {
+						t.Fatalf("reciprocals contains non-reciprocal fact %s tags %#v", fact.ID, fact.RelationshipTags)
+					}
+				}
+			},
+		},
+		{
+			lesson: UnitCircleLessonMixed,
+			wantID: "uc:sin:deg:120",
+			check: func(t *testing.T, facts []Fact) {
+				byID := factsByID(facts)
+				for _, id := range []string{"uc:concept:sin-y", "uc:quadrant:225", "uc:ref-value-sin:210", "uc:reciprocal:cot:sqrt3"} {
+					if _, ok := byID[id]; !ok {
+						t.Fatalf("mixed lesson missing %s", id)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.lesson), func(t *testing.T) {
+			facts := BuildUnitCircleLessonFacts(tc.lesson)
+			if len(facts) == 0 {
+				t.Fatal("lesson returned no facts")
+			}
+			if _, ok := factsByID(facts)[tc.wantID]; !ok {
+				t.Fatalf("lesson missing expected fact %s", tc.wantID)
+			}
+			tc.check(t, facts)
+		})
+	}
+}
+
+func TestBuildAlgebraIdentityLessonFactsFiltersByStage(t *testing.T) {
+	cases := []struct {
+		lesson  AlgebraIdentityLesson
+		wantIDs []string
+		check   func(*testing.T, []Fact)
+	}{
+		{
+			lesson: AlgebraIdentityLessonConcepts,
+			wantIDs: []string{
+				"algid:concept:identity",
+				"algid:concept:expand",
+				"algid:concept:factor",
+				"algid:concept:equivalent-expression",
+				"algid:concept:distribute",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 5 {
+					t.Fatalf("concepts returned %d facts, want 5", len(facts))
+				}
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "algid:concept:") {
+						t.Fatalf("concepts contains non-concept fact %s", fact.ID)
+					}
+					if fact.Kind != "algebra_identity_concept" {
+						t.Fatalf("concepts contains kind %s for %s", fact.Kind, fact.ID)
+					}
+					if strings.HasPrefix(fact.Prompt, "expand ") || strings.HasPrefix(fact.Prompt, "factor ") {
+						t.Fatalf("concepts contains transformation prompt %q", fact.Prompt)
+					}
+				}
+			},
+		},
+		{
+			lesson: AlgebraIdentityLessonExpand,
+			wantIDs: []string{
+				"algid:expand:square-sum",
+				"algid:expand:square-difference",
+				"algid:expand:difference-squares",
+				"algid:expand:x-times-sum",
+				"algid:expand:distributive",
+				"algid:expand:distributive-difference",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 6 {
+					t.Fatalf("expand returned %d facts, want 6", len(facts))
+				}
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "algid:expand:") {
+						t.Fatalf("expand contains non-expand fact %s", fact.ID)
+					}
+					if !strings.HasPrefix(fact.Prompt, "expand ") {
+						t.Fatalf("expand contains non-forward prompt %q", fact.Prompt)
+					}
+					if strings.Contains(fact.Answer, "(") {
+						t.Fatalf("expand answer should be expanded expression, got %s = %s", fact.ID, fact.Answer)
+					}
+				}
+			},
+		},
+		{
+			lesson: AlgebraIdentityLessonFactor,
+			wantIDs: []string{
+				"algid:factor:square-sum",
+				"algid:factor:square-difference",
+				"algid:factor:difference-squares",
+				"algid:factor:x-common-factor",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 4 {
+					t.Fatalf("factor returned %d facts, want 4", len(facts))
+				}
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "algid:factor:") {
+						t.Fatalf("factor contains non-factor fact %s", fact.ID)
+					}
+					if !strings.HasPrefix(fact.Prompt, "factor ") {
+						t.Fatalf("factor contains non-reverse prompt %q", fact.Prompt)
+					}
+				}
+			},
+		},
+		{
+			lesson: AlgebraIdentityLessonRecognize,
+			wantIDs: []string{
+				"algid:recognize:x2-minus-9",
+				"algid:recognize:x2-plus-6x-plus-9",
+				"algid:recognize:4x2-minus-25",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 3 {
+					t.Fatalf("recognize returned %d facts, want 3", len(facts))
+				}
+				for _, fact := range facts {
+					if !strings.HasPrefix(fact.ID, "algid:recognize:") {
+						t.Fatalf("recognize contains non-recognition fact %s", fact.ID)
+					}
+					if fact.Kind != "algebra_pattern_name" {
+						t.Fatalf("recognize fact %s kind = %q, want algebra_pattern_name", fact.ID, fact.Kind)
+					}
+					if !strings.HasPrefix(fact.Prompt, "what pattern") {
+						t.Fatalf("recognize prompt should ask for a pattern name, got %q", fact.Prompt)
+					}
+					if strings.ContainsAny(fact.Answer, "^()+=") {
+						t.Fatalf("recognize answer should be a pattern name, got %q", fact.Answer)
+					}
+				}
+			},
+		},
+		{
+			lesson: AlgebraIdentityLessonMixed,
+			wantIDs: []string{
+				"algid:concept:identity",
+				"algid:expand:x-times-sum",
+				"algid:factor:x-common-factor",
+				"algid:recognize:x2-minus-9",
+				"algid:factor:sum-cubes",
+				"algid:factor:numeric-difference-squares-9",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) <= 12 {
+					t.Fatalf("mixed returned %d facts, want the full algebra identity deck", len(facts))
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.lesson), func(t *testing.T) {
+			facts := BuildAlgebraIdentityLessonFacts(tc.lesson)
+			if len(facts) == 0 {
+				t.Fatal("lesson returned no facts")
+			}
+			byID := factsByID(facts)
+			for _, id := range tc.wantIDs {
+				if _, ok := byID[id]; !ok {
+					t.Fatalf("lesson missing expected fact %s", id)
+				}
+			}
+			tc.check(t, facts)
+		})
+	}
+}
+
+func TestBuildTriangleLessonFactsFiltersByStage(t *testing.T) {
+	cases := []struct {
+		lesson  TriangleLesson
+		wantIDs []string
+		check   func(*testing.T, []Fact)
+	}{
+		{
+			lesson: TriangleLessonConcepts,
+			wantIDs: []string{
+				"tri:concept:right-angle",
+				"tri:side:hypotenuse",
+				"tri:side:opposite",
+				"tri:side:adjacent",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 4 {
+					t.Fatalf("concepts returned %d facts, want 4", len(facts))
+				}
+				allowed := map[string]bool{
+					"tri:concept:right-angle": true,
+					"tri:side:hypotenuse":     true,
+					"tri:side:opposite":       true,
+					"tri:side:adjacent":       true,
+				}
+				for _, fact := range facts {
+					if !allowed[fact.ID] {
+						t.Fatalf("concepts contains unrelated fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: TriangleLessonAngleSum,
+			wantIDs: []string{
+				"tri:concept:angle-sum",
+				"tri:concept:acute-complement",
+				"tri:angle-sum:missing:60:60",
+				"tri:angle-sum:missing:30:90",
+				"tri:angle-sum:missing:45:45",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if fact.Operator != "angle-sum" {
+						t.Fatalf("angle-sum contains non-angle-sum fact %s operator %s", fact.ID, fact.Operator)
+					}
+					if strings.Contains(fact.ID, "pythagorean") {
+						t.Fatalf("angle-sum contains pythagorean fact %s", fact.ID)
+					}
+				}
+			},
+		},
+		{
+			lesson: TriangleLessonPythagorean,
+			wantIDs: []string{
+				"tri:pythagorean:formula",
+				"tri:pythagorean:3-4-5:hypotenuse",
+				"tri:pythagorean:5-12-13:leg",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !hasTag(fact, "pythagorean-theorem") {
+						t.Fatalf("pythagorean contains non-pythagorean fact %s tags %#v", fact.ID, fact.RelationshipTags)
+					}
+				}
+			},
+		},
+		{
+			lesson: TriangleLessonSpecial,
+			wantIDs: []string{
+				"tri:special:45-45-90:ratio",
+				"tri:special:30-60-90:ratio",
+				"tri:special:30-60-90:opposite-30",
+				"tri:special:30-60-90:opposite-60",
+				"tri:special:45-45-90:hypotenuse-from-leg-5",
+				"tri:special:30-60-90:hypotenuse-from-short-4",
+				"tri:special:30-60-90:long-from-short-4",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				for _, fact := range facts {
+					if !hasTag(fact, "special-right-triangles") {
+						t.Fatalf("special-right contains unrelated fact %s tags %#v", fact.ID, fact.RelationshipTags)
+					}
+				}
+			},
+		},
+		{
+			lesson: TriangleLessonSOHCAHTOA,
+			wantIDs: []string{
+				"tri:trig:sin-ratio",
+				"tri:trig:cos-ratio",
+				"tri:trig:tan-ratio",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 3 {
+					t.Fatalf("sohcahtoa returned %d facts, want 3", len(facts))
+				}
+				for _, fact := range facts {
+					if !hasTag(fact, "sohcahtoa") {
+						t.Fatalf("sohcahtoa contains unrelated fact %s tags %#v", fact.ID, fact.RelationshipTags)
+					}
+				}
+			},
+		},
+		{
+			lesson: TriangleLessonMixed,
+			wantIDs: []string{
+				"tri:concept:right-angle",
+				"tri:angle-sum:missing:60:60",
+				"tri:pythagorean:formula",
+				"tri:special:30-60-90:long-from-short-4",
+				"tri:trig:sin-ratio",
+				"tri:similar:side-ratios",
+			},
+			check: func(t *testing.T, facts []Fact) {
+				if len(facts) <= 15 {
+					t.Fatalf("mixed returned %d facts, want the full triangle deck", len(facts))
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.lesson), func(t *testing.T) {
+			facts := BuildTriangleLessonFacts(tc.lesson)
+			if len(facts) == 0 {
+				t.Fatal("lesson returned no facts")
+			}
+			byID := factsByID(facts)
+			for _, id := range tc.wantIDs {
+				if _, ok := byID[id]; !ok {
+					t.Fatalf("lesson missing expected fact %s", id)
+				}
+			}
+			tc.check(t, facts)
+		})
+	}
+}
+
 func TestUnitCircleAnswerMatching(t *testing.T) {
 	radian := Fact{Kind: "unit_circle_radian", Answer: "5pi/6"}
 	for _, answer := range []string{"5pi/6", "5*pi/6", "5 pi / 6", "5pi/6 rad"} {
@@ -408,6 +962,14 @@ func hasTag(fact Fact, tag string) bool {
 	return false
 }
 
+func factsByID(facts []Fact) map[string]Fact {
+	byID := map[string]Fact{}
+	for _, fact := range facts {
+		byID[fact.ID] = fact
+	}
+	return byID
+}
+
 func TestBuildExponentLogFactsIncludesCoreRelationships(t *testing.T) {
 	facts := BuildFacts(2, 12, ModeExponentsLogs)
 	byID := map[string]Fact{}
@@ -422,6 +984,10 @@ func TestBuildExponentLogFactsIncludesCoreRelationships(t *testing.T) {
 		"exlog:log:2:-3":              "-3",
 		"exlog:pow2log:2:5":           "log_2(32)=5",
 		"exlog:log2pow:2:5":           "2^5=32",
+		"exlog:pow2root:2:5":          "root_5(32)=2",
+		"exlog:log2root:2:5":          "root_5(32)=2",
+		"exlog:root2pow:2:5":          "2^5=32",
+		"exlog:root2log:2:5":          "log_2(32)=5",
 		"exlog:missing-exp:2:5":       "5",
 		"exlog:missing-value:2:5":     "32",
 		"exlog:missing-base-log:2:5":  "2",
@@ -443,6 +1009,22 @@ func TestBuildExponentLogFactsIncludesCoreRelationships(t *testing.T) {
 	fact := byID["exlog:log:2:5"]
 	if fact.Explanation == "" || !hasTag(fact, "exponential-logarithmic-equivalence") {
 		t.Fatalf("exponent/log metadata = explanation %q tags %#v", fact.Explanation, fact.RelationshipTags)
+	}
+
+	for _, id := range []string{"exlog:pow2log:2:5", "exlog:pow2root:2:5", "exlog:log2pow:2:5", "exlog:log2root:2:5", "exlog:root2pow:2:5", "exlog:root2log:2:5"} {
+		fact, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing directed relationship fact %s", id)
+		}
+		if fact.Explanation == "" || len(fact.RelationshipTags) == 0 {
+			t.Fatalf("%s missing relationship metadata: explanation %q tags %#v", id, fact.Explanation, fact.RelationshipTags)
+		}
+	}
+	if byID["exlog:pow2root:2:5"].Prompt == byID["exlog:pow2log:2:5"].Prompt {
+		t.Fatal("exponent-to-root and exponent-to-log should have distinct prompts for independent tracking")
+	}
+	if !hasTag(byID["exlog:pow2root:2:5"], "target-root") || !hasTag(byID["exlog:root2log:2:5"], "source-root") {
+		t.Fatalf("root conversion tags missing: pow2root %#v root2log %#v", byID["exlog:pow2root:2:5"].RelationshipTags, byID["exlog:root2log:2:5"].RelationshipTags)
 	}
 }
 
@@ -477,10 +1059,268 @@ func TestExponentLogAnswerMatching(t *testing.T) {
 		t.Fatal("log form should not satisfy an exponent-form prompt")
 	}
 
+	rootForm := Fact{Kind: "root_form", Answer: "root_5(32)=2"}
+	for _, answer := range []string{"root_5(32)=2", "root5(32)=2", "5throot(32)=2"} {
+		if !answerMatches(rootForm, answer) {
+			t.Fatalf("%q should match root_5(32)=2", answer)
+		}
+	}
+	if answerMatches(rootForm, "2^5=32") {
+		t.Fatal("exponent form should not satisfy a root-form prompt")
+	}
+	if answerMatches(rootForm, "log_2(32)=5") {
+		t.Fatal("log form should not satisfy a root-form prompt")
+	}
+
+	squareRootForm := Fact{Kind: "root_form", Answer: "root_2(16)=4"}
+	for _, answer := range []string{"root_2(16)=4", "sqrt(16)=4", "squareroot(16)=4"} {
+		if !answerMatches(squareRootForm, answer) {
+			t.Fatalf("%q should match root_2(16)=4", answer)
+		}
+	}
+
 	role := Fact{Kind: "exponent_log_role", Answer: "exponent"}
 	for _, answer := range []string{"exponent", "power"} {
 		if !answerMatches(role, answer) {
 			t.Fatalf("%q should match exponent role", answer)
 		}
+	}
+}
+
+func TestBuildTriangleFactsIncludesCoreRelationships(t *testing.T) {
+	facts := BuildFacts(2, 12, ModeTriangles)
+	byID := factsByID(facts)
+
+	cases := map[string]string{
+		"tri:concept:angle-sum":                        "180",
+		"tri:concept:right-angle":                      "90",
+		"tri:concept:acute-complement":                 "90",
+		"tri:angle-sum:missing:60:60":                  "60",
+		"tri:angle-sum:missing:30:90":                  "60",
+		"tri:angle-sum:missing:45:45":                  "90",
+		"tri:side:hypotenuse":                          "hypotenuse",
+		"tri:side:opposite":                            "opposite",
+		"tri:side:adjacent":                            "adjacent",
+		"tri:pythagorean:formula":                      "a^2+b^2=c^2",
+		"tri:pythagorean:3-4-5:hypotenuse":             "5",
+		"tri:pythagorean:5-12-13:leg":                  "12",
+		"tri:special:45-45-90:ratio":                   "1:1:sqrt(2)",
+		"tri:special:30-60-90:ratio":                   "1:sqrt(3):2",
+		"tri:special:30-60-90:opposite-30":             "short leg",
+		"tri:special:30-60-90:opposite-60":             "long leg",
+		"tri:special:45-45-90:hypotenuse-from-leg-5":   "5sqrt(2)",
+		"tri:special:30-60-90:hypotenuse-from-short-4": "8",
+		"tri:special:30-60-90:long-from-short-4":       "4sqrt(3)",
+		"tri:trig:sin-ratio":                           "opposite/hypotenuse",
+		"tri:trig:cos-ratio":                           "adjacent/hypotenuse",
+		"tri:trig:tan-ratio":                           "opposite/adjacent",
+		"tri:similar:side-ratios":                      "proportional",
+	}
+	for id, answer := range cases {
+		fact, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing fact %s", id)
+		}
+		if fact.Answer != answer {
+			t.Fatalf("%s answer = %q, want %q", id, fact.Answer, answer)
+		}
+		if fact.Explanation == "" || len(fact.RelationshipTags) == 0 {
+			t.Fatalf("%s missing relationship metadata: explanation %q tags %#v", id, fact.Explanation, fact.RelationshipTags)
+		}
+	}
+
+	if !hasTag(byID["tri:trig:sin-ratio"], "trig-foundations") {
+		t.Fatalf("sin ratio tags = %#v, want trig-foundations", byID["tri:trig:sin-ratio"].RelationshipTags)
+	}
+	if !hasTag(byID["tri:special:30-60-90:ratio"], "special-right-triangles") {
+		t.Fatalf("30-60-90 tags = %#v, want special-right-triangles", byID["tri:special:30-60-90:ratio"].RelationshipTags)
+	}
+}
+
+func TestTriangleFactsIncludedOnlyInExpectedModes(t *testing.T) {
+	triangleID := "tri:concept:angle-sum"
+	for _, mode := range []Mode{ModeArithmetic, ModeFractions, ModePercentages, ModePercentRelations, ModeExponentsLogs, ModeAlgebraIdentities, ModeUnitCircle} {
+		if _, ok := factsByID(BuildFacts(2, 12, mode))[triangleID]; ok {
+			t.Fatalf("%s should not include triangle facts", mode)
+		}
+	}
+	for _, mode := range []Mode{ModeTriangles, ModeRelationships, ModeMixed} {
+		if _, ok := factsByID(BuildFacts(2, 12, mode))[triangleID]; !ok {
+			t.Fatalf("%s should include triangle facts", mode)
+		}
+	}
+
+	unitCircleConcepts := BuildFactsWithLesson(2, 12, ModeUnitCircle, UnitCircleLessonConcepts)
+	if _, ok := factsByID(unitCircleConcepts)[triangleID]; ok {
+		t.Fatal("unit-circle lesson facts should not include triangle facts")
+	}
+}
+
+func TestTriangleFactIDsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, fact := range BuildTriangleFacts() {
+		if seen[fact.ID] {
+			t.Fatalf("duplicate triangle fact ID %s", fact.ID)
+		}
+		seen[fact.ID] = true
+	}
+}
+
+func TestTriangleAnswerMatching(t *testing.T) {
+	formula := Fact{Kind: "triangle_formula", Answer: "a^2+b^2=c^2"}
+	for _, answer := range []string{"a^2+b^2=c^2", "a**2 + b**2 = c**2"} {
+		if !answerMatches(formula, answer) {
+			t.Fatalf("%q should match Pythagorean formula", answer)
+		}
+	}
+
+	ratio := Fact{Kind: "triangle_ratio", Answer: "opposite/hypotenuse"}
+	for _, answer := range []string{"opposite/hypotenuse", "opp/hyp", "opposite over hypotenuse"} {
+		if !answerMatches(ratio, answer) {
+			t.Fatalf("%q should match opposite/hypotenuse", answer)
+		}
+	}
+
+	length := Fact{Kind: "triangle_length", Answer: "5sqrt(2)"}
+	for _, answer := range []string{"5sqrt(2)", "5sqrt2", "5*sqrt(2)"} {
+		if !answerMatches(length, answer) {
+			t.Fatalf("%q should match 5sqrt(2)", answer)
+		}
+	}
+
+	term := Fact{Kind: "triangle_term", Answer: "short leg"}
+	for _, answer := range []string{"short leg", "short side", "short"} {
+		if !answerMatches(term, answer) {
+			t.Fatalf("%q should match short leg", answer)
+		}
+	}
+}
+
+func TestBuildAlgebraIdentityFactsIncludesCommonPatterns(t *testing.T) {
+	facts := BuildFacts(2, 12, ModeAlgebraIdentities)
+	byID := factsByID(facts)
+
+	vocabulary := map[string]string{
+		"algid:concept:identity":              "true for all allowed values",
+		"algid:concept:equivalent-expression": "same value for the same inputs",
+		"algid:concept:expand":                "write as a sum of terms",
+		"algid:concept:factor":                "write as a product of factors",
+		"algid:concept:distribute":            "multiply into each term",
+	}
+	for id, answer := range vocabulary {
+		fact, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing fact %s", id)
+		}
+		if fact.Answer != answer {
+			t.Fatalf("%s answer = %q, want %q", id, fact.Answer, answer)
+		}
+		if fact.Kind != "algebra_identity_concept" {
+			t.Fatalf("%s kind = %q, want algebra_identity_concept", id, fact.Kind)
+		}
+		if fact.Explanation == "" || !hasTag(fact, "algebra-identity") {
+			t.Fatalf("%s missing relationship metadata: explanation %q tags %#v", id, fact.Explanation, fact.RelationshipTags)
+		}
+	}
+
+	cases := []struct {
+		id   string
+		want string
+		tags []string
+	}{
+		{id: "algid:expand:distributive", want: "ab+ac", tags: []string{"algebra-identity", "distributive-property", "expand"}},
+		{id: "algid:expand:distributive-difference", want: "ab-ac", tags: []string{"algebra-identity", "distributive-property", "expand"}},
+		{id: "algid:expand:difference-squares", want: "a^2-b^2", tags: []string{"algebra-identity", "difference-of-squares", "expand"}},
+		{id: "algid:factor:difference-squares", want: "(a+b)(a-b)", tags: []string{"algebra-identity", "difference-of-squares", "factor"}},
+		{id: "algid:expand:square-sum", want: "a^2+2ab+b^2", tags: []string{"algebra-identity", "perfect-square-trinomial", "expand"}},
+		{id: "algid:expand:square-difference", want: "a^2-2ab+b^2", tags: []string{"algebra-identity", "perfect-square-trinomial", "expand"}},
+		{id: "algid:factor:numeric-difference-squares-9", want: "(x+3)(x-3)", tags: []string{"algebra-identity", "difference-of-squares", "factor"}},
+		{id: "algid:factor:numeric-difference-squares-16", want: "(x+4)(x-4)", tags: []string{"algebra-identity", "difference-of-squares", "factor"}},
+		{id: "algid:factor:numeric-perfect-square-plus", want: "(x+3)^2", tags: []string{"algebra-identity", "perfect-square-trinomial", "factor"}},
+		{id: "algid:factor:numeric-perfect-square-minus", want: "(x-5)^2", tags: []string{"algebra-identity", "perfect-square-trinomial", "factor"}},
+		{id: "algid:factor:sum-cubes", want: "(a+b)(a^2-ab+b^2)", tags: []string{"algebra-identity", "factor"}},
+		{id: "algid:factor:difference-cubes", want: "(a-b)(a^2+ab+b^2)", tags: []string{"algebra-identity", "factor"}},
+		{id: "algid:factor:common-factor-x", want: "x(y+z)", tags: []string{"algebra-identity", "factor"}},
+		{id: "algid:expand:binomial-product", want: "x^2+(a+b)x+ab", tags: []string{"algebra-identity", "expand"}},
+	}
+	for _, tc := range cases {
+		fact, ok := byID[tc.id]
+		if !ok {
+			t.Fatalf("missing fact %s", tc.id)
+		}
+		if fact.Answer != tc.want {
+			t.Fatalf("%s answer = %q, want %q", tc.id, fact.Answer, tc.want)
+		}
+		if fact.Kind != "algebra_identity" {
+			t.Fatalf("%s kind = %q, want algebra_identity", tc.id, fact.Kind)
+		}
+		if fact.Explanation == "" {
+			t.Fatalf("%s missing explanation", tc.id)
+		}
+		for _, tag := range tc.tags {
+			if !hasTag(fact, tag) {
+				t.Fatalf("%s tags = %#v, want %s", tc.id, fact.RelationshipTags, tag)
+			}
+		}
+	}
+}
+
+func TestAlgebraIdentitiesIncludedOnlyInExpectedModes(t *testing.T) {
+	algebraID := "algid:expand:square-sum"
+	for _, mode := range []Mode{ModeArithmetic, ModeFractions, ModePercentages, ModePercentRelations, ModeExponentsLogs, ModeUnitCircle} {
+		if _, ok := factsByID(BuildFacts(2, 12, mode))[algebraID]; ok {
+			t.Fatalf("%s should not include algebra identity facts", mode)
+		}
+	}
+	for _, mode := range []Mode{ModeAlgebraIdentities, ModeRelationships, ModeMixed} {
+		if _, ok := factsByID(BuildFacts(2, 12, mode))[algebraID]; !ok {
+			t.Fatalf("%s should include algebra identity facts", mode)
+		}
+	}
+}
+
+func TestAlgebraIdentityFactIDsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, fact := range BuildAlgebraIdentityFacts() {
+		if seen[fact.ID] {
+			t.Fatalf("duplicate algebra identity fact ID %s", fact.ID)
+		}
+		seen[fact.ID] = true
+	}
+}
+
+func TestAlgebraIdentityAnswerMatching(t *testing.T) {
+	fact := Fact{Kind: "algebra_identity", Answer: "a^2+2ab+b^2"}
+	for _, answer := range []string{"a^2+2ab+b^2", "a^2 + 2*a*b + b^2", "a**2+2ab+b**2"} {
+		if !answerMatches(fact, answer) {
+			t.Fatalf("%q should match square-of-sum expansion", answer)
+		}
+	}
+	if answerMatches(fact, "a^2+b^2") {
+		t.Fatal("incomplete expansion should not match")
+	}
+
+	concept := Fact{Kind: "algebra_identity_concept", Answer: "write as a product of factors"}
+	for _, answer := range []string{"factor", "factoring", "write as a product of factors"} {
+		if !answerMatches(concept, answer) {
+			t.Fatalf("%q should match factor concept", answer)
+		}
+	}
+
+	distribute := Fact{Kind: "algebra_identity_concept", Answer: "multiply into each term"}
+	for _, answer := range []string{"distribute", "distribution", "multiply into each term"} {
+		if !answerMatches(distribute, answer) {
+			t.Fatalf("%q should match distribute concept", answer)
+		}
+	}
+
+	pattern := Fact{Kind: "algebra_pattern_name", Answer: "difference of squares"}
+	for _, answer := range []string{"difference of squares", "difference-of-squares", "diff of squares"} {
+		if !answerMatches(pattern, answer) {
+			t.Fatalf("%q should match difference of squares", answer)
+		}
+	}
+	if answerMatches(pattern, "(x+3)(x-3)") {
+		t.Fatal("recognize prompt should not accept final factoring transformation")
 	}
 }

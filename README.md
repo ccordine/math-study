@@ -32,12 +32,33 @@ Unit circle mode:
 
 ```sh
 go run . -mode unit-circle -minutes 10
+go run . -mode unit-circle -lesson quadrants -minutes 10
 ```
 
 Exponent/log mode:
 
 ```sh
 go run . -mode exponents-logs -minutes 10
+go run . -mode root-exponent-log -minutes 10
+```
+
+Algebra identities mode:
+
+```sh
+go run . -mode algebra-identities -minutes 10
+go run . -mode algebra-identities -lesson expand -minutes 10
+go run . -mode algebra-identities -lesson factor -minutes 10
+go run . -mode algebra-identities -lesson recognize -minutes 10
+```
+
+Triangle relationships mode:
+
+```sh
+go run . -mode triangles -minutes 10
+go run . -mode triangles -lesson angle-sum -minutes 10
+go run . -mode triangles -lesson pythagorean -minutes 10
+go run . -mode triangles -lesson special-right -minutes 10
+go run . -mode triangles -lesson sohcahtoa -minutes 10
 ```
 
 All relationship modes together:
@@ -76,12 +97,28 @@ Unit circle mode:
 
 ```sh
 go run . web -mode unit-circle -addr 127.0.0.1:8080
+go run . web -mode unit-circle -lesson quadrants -addr 127.0.0.1:8080
 ```
 
 Exponent/log mode:
 
 ```sh
 go run . web -mode exponents-logs -addr 127.0.0.1:8080
+go run . web -mode root-exponent-log -addr 127.0.0.1:8080
+```
+
+Algebra identities mode:
+
+```sh
+go run . web -mode algebra-identities -addr 127.0.0.1:8080
+go run . web -mode algebra-identities -lesson expand -addr 127.0.0.1:8080
+```
+
+Triangle relationships mode:
+
+```sh
+go run . web -mode triangles -addr 127.0.0.1:8080
+go run . web -mode triangles -lesson pythagorean -addr 127.0.0.1:8080
 ```
 
 All relationship modes together:
@@ -96,7 +133,7 @@ Progress is stored in `~/.math-study-progress.json` by default. Pass `-progress 
 
 Facts that are missed or slow are weighted more heavily. Facts answered correctly several times without misses or slow responses are treated as mastered and appear less often.
 
-Relationship mode combines the conceptual decks without arithmetic fact practice: fractions, percentages, percent swaps, unit circle, and exponents/logs.
+Relationship mode combines the conceptual decks without arithmetic fact practice: fractions, percentages, percent swaps, unit circle, exponents/logs, algebra identities, and triangles.
 
 Fraction mode trains parts-of-a-whole relationships, numerator/denominator roles, fraction-as-division, fraction/decimal equivalence, complements to one, and reciprocals. For fraction-to-decimal prompts, `.125` and `0.125` are both accepted. Equivalent quantities like `2/8`, `.25`, and `0.25` can satisfy exact relationship prompts for `1/4`.
 
@@ -104,6 +141,74 @@ Percentage mode trains percent-as-multiplier and percent-means-per-100 relations
 
 Percentage relationship mode trains the swap `a% of b = b% of a`, so prompts like `20% of 35` expect `35% of 20` or the numeric value `7`.
 
-Unit circle mode trains the relationship web behind the circle: degree/radian conversions, `(cos, sin)` coordinates, sine-as-y, cosine-as-x, tangent-as-y-over-x, reference angles, quadrant signs, special triangles, cofunction relationships, and reciprocal functions. Each relationship drill carries an explanation and tags such as `sin-is-y`, `cos-is-x`, `tan-is-y-over-x`, `quadrant-signs`, and `reference-angles`. Exact radical answers like `sqrt(3)/2` are expected instead of decimal approximations.
+Unit circle mode is a staged curriculum, not one giant deck. The default lesson is `concepts`; do not start with `mixed`.
 
-Exponent/log mode trains exact relationships like `2^5 = 32 <=> log_2(32) = 5`, including negative exponents, missing bases, missing exponents, missing values, inverse forms like `log_2(2^5)` and `2^(log_2(32))`, and concept prompts like “a logarithm asks for the exponent.”
+Recommended unit-circle order:
+
+```sh
+go run . -mode unit-circle -lesson concepts
+go run . -mode unit-circle -lesson quadrants
+go run . -mode unit-circle -lesson reference-angles
+go run . -mode unit-circle -lesson reference-values
+go run . -mode unit-circle -lesson assemble
+go run . -mode unit-circle -lesson tangent
+go run . -mode unit-circle -lesson reciprocals
+go run . -mode unit-circle -lesson mixed
+```
+
+Lessons:
+
+- `concepts`: point order `(cos, sin)`, sine is y, cosine is x, tangent is y/x, and reciprocal function definitions.
+- `quadrants`: quadrant identification and signs of sin/cos/tan; no exact trig values.
+- `reference-angles`: angle to reference angle and angle to quadrant; no trig values.
+- `reference-values`: first-quadrant values for 30, 45, and 60 degrees only.
+- `assemble`: combine reference angle plus quadrant sign for sin/cos only.
+- `tangent`: tangent ratio, tangent signs, tangent values, and undefined cases.
+- `reciprocals`: sec/csc/cot values and reciprocal relationship prompts.
+- `mixed`: full review after the pieces are individually comfortable.
+
+Each relationship drill carries an explanation and tags such as `sin-is-y`, `cos-is-x`, `tan-is-y-over-x`, `quadrant-signs`, and `reference-angles`. Exact radical answers like `sqrt(3)/2` are expected instead of decimal approximations.
+
+Exponent/log mode trains exact relationships like `2^5 = 32 <=> log_2(32) = 5`, including negative exponents, missing bases, missing exponents, missing values, inverse forms like `log_2(2^5)` and `2^(log_2(32))`, and concept prompts like "a logarithm asks for the exponent." For positive exponents it also trains root/exponent/log triads like `2^5=32 <=> log_2(32)=5 <=> root_5(32)=2`, with each source-target direction tracked as its own fact. Aliases include `root-exponent-log` and `roots-exponents-logs`.
+
+Triangles mode trains relationships that support later trig and unit-circle intuition. The default lesson is `concepts`, which focuses on right-angle, hypotenuse, opposite, and adjacent relationships. Triangle facts are not mixed into unit-circle lessons.
+
+Recommended triangles order:
+
+```sh
+go run . -mode triangles -lesson concepts
+go run . -mode triangles -lesson angle-sum
+go run . -mode triangles -lesson pythagorean
+go run . -mode triangles -lesson special-right
+go run . -mode triangles -lesson sohcahtoa
+go run . -mode triangles -lesson mixed
+```
+
+Lessons:
+
+- `concepts`: right angle, hypotenuse, opposite side, and adjacent side meanings.
+- `angle-sum`: triangle angle sums and missing-angle prompts.
+- `pythagorean`: `a^2+b^2=c^2`, missing hypotenuse, and missing leg prompts.
+- `special-right`: 45-45-90 and 30-60-90 ratios, side identification, and simple missing sides.
+- `sohcahtoa`: sine, cosine, and tangent as right-triangle side ratios.
+- `mixed`: full review after the pieces are individually comfortable.
+
+Algebra identities mode is also staged. The default lesson is `concepts`, which trains the meaning of identity, expand, factor, and equivalent expression before asking for transformations.
+
+Recommended algebra-identities order:
+
+```sh
+go run . -mode algebra-identities -lesson concepts
+go run . -mode algebra-identities -lesson expand
+go run . -mode algebra-identities -lesson factor
+go run . -mode algebra-identities -lesson recognize
+go run . -mode algebra-identities -lesson mixed
+```
+
+Lessons:
+
+- `concepts`: identity, expand, factor, and equivalent-expression vocabulary.
+- `expand`: forward transformations like `(a+b)^2` to `a^2+2ab+b^2`.
+- `factor`: reverse transformations like `a^2-b^2` to `(a+b)(a-b)`.
+- `recognize`: pattern-name prompts such as difference of squares or perfect-square trinomial.
+- `mixed`: full review, including the staged lessons plus broader patterns like cubes and binomial products.
