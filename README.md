@@ -166,7 +166,7 @@ go run . -mode unit-circle -lesson mixed
 
 Lessons:
 
-- `concepts`: point order `(cos, sin)`, sine is y, cosine is x, tangent is y/x, and reciprocal function definitions.
+- `concepts`: point order `(cos, sin)`, sine is y, cosine is x, and tangent is y/x.
 - `quadrants`: quadrant identification and signs of sin/cos/tan; no exact trig values.
 - `reference-angles`: angle to reference angle and angle to quadrant; no trig values.
 - `reference-values`: first-quadrant values for 30, 45, and 60 degrees only.

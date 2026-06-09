@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,6 +63,53 @@ func TestMasteredFactDropsWeight(t *testing.T) {
 	}
 	if got := trainer.Weight("mul:2:3"); got != 1 {
 		t.Fatalf("mastered weight = %d, want 1", got)
+	}
+}
+
+func TestNextFactAvoidsRecentFacts(t *testing.T) {
+	trainer := &Trainer{
+		Facts: []Fact{
+			{ID: "a", Prompt: "a"},
+			{ID: "b", Prompt: "b"},
+			{ID: "c", Prompt: "c"},
+			{ID: "d", Prompt: "d"},
+		},
+		Progress: Progress{Facts: map[string]*FactStats{
+			"a": {Seen: 1, Misses: 20, Wrong: 20},
+		}},
+		Rand:          rand.New(rand.NewSource(1)),
+		RecentFactIDs: []string{"a", "b", "c"},
+	}
+
+	fact := trainer.NextFact()
+	if fact.ID != "d" {
+		t.Fatalf("NextFact picked %s, want only non-recent fact d", fact.ID)
+	}
+	wantRecent := []string{"b", "c", "d"}
+	if strings.Join(trainer.RecentFactIDs, ",") != strings.Join(wantRecent, ",") {
+		t.Fatalf("recent facts = %#v, want %#v", trainer.RecentFactIDs, wantRecent)
+	}
+}
+
+func TestNextFactAvoidsImmediateRepeatInSmallDeck(t *testing.T) {
+	trainer := &Trainer{
+		Facts: []Fact{
+			{ID: "a", Prompt: "a"},
+			{ID: "b", Prompt: "b"},
+		},
+		Progress: Progress{Facts: map[string]*FactStats{
+			"a": {Seen: 1, Misses: 50, Wrong: 50},
+		}},
+		Rand:          rand.New(rand.NewSource(2)),
+		RecentFactIDs: []string{"a"},
+	}
+
+	fact := trainer.NextFact()
+	if fact.ID != "b" {
+		t.Fatalf("NextFact picked %s, want non-recent fact b", fact.ID)
+	}
+	if strings.Join(trainer.RecentFactIDs, ",") != "b" {
+		t.Fatalf("recent facts = %#v, want only b", trainer.RecentFactIDs)
 	}
 }
 
@@ -427,9 +475,9 @@ func TestBuildFactsWithUnitCircleDefaultLessonUsesConcepts(t *testing.T) {
 	if _, ok := byID["uc:concept:sin-y"]; !ok {
 		t.Fatal("concepts lesson should include sine-is-y concept")
 	}
-	for _, forbidden := range []string{"uc:sin:deg:120", "uc:cos:rad:330", "uc:tan:rad:45"} {
+	for _, forbidden := range []string{"uc:sin:deg:120", "uc:cos:rad:330", "uc:tan:rad:45", "uc:concept:cot-recip", "uc:concept:sec-recip", "uc:concept:csc-recip"} {
 		if _, ok := byID[forbidden]; ok {
-			t.Fatalf("concepts lesson should not include angle value fact %s", forbidden)
+			t.Fatalf("concepts lesson should not include %s", forbidden)
 		}
 	}
 	for _, fact := range facts {
@@ -493,12 +541,18 @@ func TestBuildUnitCircleLessonFactsFiltersByStage(t *testing.T) {
 			lesson: UnitCircleLessonConcepts,
 			wantID: "uc:concept:point-order",
 			check: func(t *testing.T, facts []Fact) {
+				if len(facts) != 4 {
+					t.Fatalf("concepts returned %d facts, want 4", len(facts))
+				}
 				for _, fact := range facts {
 					if !strings.HasPrefix(fact.ID, "uc:concept:") {
 						t.Fatalf("concepts contains non-concept fact %s", fact.ID)
 					}
 					if fact.Kind == "unit_circle_value" {
 						t.Fatalf("concepts contains value fact %s", fact.ID)
+					}
+					if hasTag(fact, "reciprocal-functions") {
+						t.Fatalf("concepts contains reciprocal fact %s", fact.ID)
 					}
 				}
 			},

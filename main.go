@@ -50,12 +50,13 @@ type Progress struct {
 }
 
 type Trainer struct {
-	Facts    []Fact
-	ByID     map[string]Fact
-	Progress Progress
-	Rand     *rand.Rand
-	Path     string
-	Mode     Mode
+	Facts         []Fact
+	ByID          map[string]Fact
+	Progress      Progress
+	Rand          *rand.Rand
+	Path          string
+	Mode          Mode
+	RecentFactIDs []string
 }
 
 type Attempt struct {
@@ -1118,7 +1119,9 @@ func BuildUnitCircleLessonFacts(lesson UnitCircleLesson) []Fact {
 	angles := unitCircleAngles()
 	switch lesson {
 	case UnitCircleLessonConcepts:
-		return unitCircleConceptFacts()
+		return filterFacts(unitCircleConceptFacts(), func(fact Fact) bool {
+			return !hasRelationshipTag(fact, "reciprocal-functions")
+		})
 	case UnitCircleLessonQuadrants:
 		return filterFacts(BuildUnitCircleFacts(), func(fact Fact) bool {
 			return strings.HasPrefix(fact.ID, "uc:quadrant:") || strings.HasPrefix(fact.ID, "uc:sign:")
@@ -2470,21 +2473,72 @@ func (t *Trainer) Save() error {
 }
 
 func (t *Trainer) NextFact() Fact {
+	fact := t.pickFactAvoidingRecent()
+	t.rememberRecentFact(fact.ID)
+	return fact
+}
+
+func (t *Trainer) pickFactAvoidingRecent() Fact {
+	recent := map[string]bool{}
+	for _, id := range t.RecentFactIDs {
+		recent[id] = true
+	}
+	fact, ok := t.pickWeightedFact(func(candidate Fact) bool {
+		return !recent[candidate.ID]
+	})
+	if ok {
+		return fact
+	}
+	fact, _ = t.pickWeightedFact(func(Fact) bool {
+		return true
+	})
+	return fact
+}
+
+func (t *Trainer) pickWeightedFact(keep func(Fact) bool) (Fact, bool) {
 	total := 0
 	weights := make([]int, len(t.Facts))
 	for i, fact := range t.Facts {
+		if !keep(fact) {
+			continue
+		}
 		weight := t.Weight(fact.ID)
 		weights[i] = weight
 		total += weight
 	}
+	if total == 0 {
+		return Fact{}, false
+	}
 	pick := t.Rand.Intn(total)
 	for i, weight := range weights {
+		if weight == 0 {
+			continue
+		}
 		if pick < weight {
-			return t.Facts[i]
+			return t.Facts[i], true
 		}
 		pick -= weight
 	}
-	return t.Facts[len(t.Facts)-1]
+	return t.Facts[len(t.Facts)-1], true
+}
+
+func (t *Trainer) rememberRecentFact(id string) {
+	limit := t.recentFactLimit()
+	if limit == 0 || id == "" {
+		t.RecentFactIDs = nil
+		return
+	}
+	t.RecentFactIDs = append(t.RecentFactIDs, id)
+	if len(t.RecentFactIDs) > limit {
+		t.RecentFactIDs = t.RecentFactIDs[len(t.RecentFactIDs)-limit:]
+	}
+}
+
+func (t *Trainer) recentFactLimit() int {
+	if len(t.Facts) <= 1 {
+		return 0
+	}
+	return min(3, len(t.Facts)-1)
 }
 
 func (t *Trainer) Weight(id string) int {
