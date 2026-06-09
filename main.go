@@ -126,9 +126,15 @@ const (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "web" {
-		webCmd(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "web":
+			webCmd(os.Args[2:])
+			return
+		case "shell", "interactive", "menu":
+			shellCmd(os.Args[2:])
+			return
+		}
 	}
 	cliCmd(os.Args[1:])
 }
@@ -147,8 +153,11 @@ func cliCmd(args []string) {
 	parsedLessons := lessonsForMode(parsedMode, *lesson)
 	trainer := mustTrainer(*min, *max, parsedMode, parsedLessons, *progress)
 	reader := bufio.NewReader(os.Stdin)
-	deadline := time.Now().Add(time.Duration(*minutes) * time.Minute)
+	runPracticeSession(trainer, reader, *minutes)
+}
 
+func runPracticeSession(trainer *Trainer, reader *bufio.Reader, minutes int) {
+	deadline := time.Now().Add(time.Duration(minutes) * time.Minute)
 	fmt.Printf("Math trainer: %s mode. Type q to quit.\n", trainer.Mode)
 	for time.Now().Before(deadline) {
 		fact := trainer.NextFact()
@@ -171,11 +180,303 @@ func cliCmd(args []string) {
 			}
 		}
 	}
-
 	if err := trainer.Save(); err != nil {
 		log.Printf("save progress: %v", err)
 	}
 	printWeakFacts(trainer, 12)
+}
+
+type shellModeChoice struct {
+	Mode        Mode
+	Label       string
+	Description string
+	Aliases     []string
+}
+
+type shellLessonChoice struct {
+	Value       string
+	Label       string
+	Description string
+}
+
+func shellCmd(args []string) {
+	fs := flag.NewFlagSet("math-study shell", flag.ExitOnError)
+	minDefault := fs.Int("min", 2, "default smallest multiplication factor")
+	maxDefault := fs.Int("max", 12, "default largest multiplication factor")
+	minutesDefault := fs.Int("minutes", 10, "default session length in minutes")
+	progress := fs.String("progress", defaultProgressPath(), "progress JSON path")
+	_ = fs.Parse(args)
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Math Relationship Trainer")
+	fmt.Println("Interactive shell. Type q at any menu prompt to quit.")
+	fmt.Printf("Progress: %s\n", *progress)
+
+	for {
+		mode, ok := promptShellMode(reader)
+		if !ok {
+			return
+		}
+		lesson := ""
+		if shellModeHasLessons(mode) {
+			lesson, ok = promptShellLesson(reader, mode)
+			if !ok {
+				return
+			}
+		}
+		minValue := *minDefault
+		maxValue := *maxDefault
+		if shellModeUsesArithmeticRange(mode) {
+			minValue, ok = promptShellInt(reader, "Smallest multiplication factor", *minDefault, 1, 99)
+			if !ok {
+				return
+			}
+			maxValue, ok = promptShellInt(reader, "Largest multiplication factor", *maxDefault, minValue, 99)
+			if !ok {
+				return
+			}
+		}
+		minutes, ok := promptShellInt(reader, "Session length in minutes", *minutesDefault, 1, 240)
+		if !ok {
+			return
+		}
+
+		lessons := lessonsForMode(mode, lesson)
+		trainer := mustTrainer(minValue, maxValue, mode, lessons, *progress)
+		fmt.Println()
+		printShellSessionSummary(mode, lessons, minValue, maxValue, minutes)
+		runPracticeSession(trainer, reader, minutes)
+
+		again, ok := promptShellYesNo(reader, "\nStart another session?", true)
+		if !ok || !again {
+			return
+		}
+	}
+}
+
+func promptShellMode(reader *bufio.Reader) (Mode, bool) {
+	fmt.Println("\nModes:")
+	for i, choice := range shellModeChoices() {
+		fmt.Printf("  %d. %-20s %s\n", i+1, choice.Label, choice.Description)
+	}
+	for {
+		input, ok := promptShellLine(reader, fmt.Sprintf("Mode [%s]: ", ModeRelationships))
+		if !ok {
+			return "", false
+		}
+		mode, ok := parseShellModeChoice(input)
+		if ok {
+			return mode, true
+		}
+		fmt.Println("Enter a mode number or name from the list.")
+	}
+}
+
+func promptShellLesson(reader *bufio.Reader, mode Mode) (string, bool) {
+	choices := shellLessonChoices(mode)
+	if len(choices) == 0 {
+		return "", true
+	}
+	fmt.Println("\nLessons:")
+	for i, choice := range choices {
+		fmt.Printf("  %d. %-18s %s\n", i+1, choice.Label, choice.Description)
+	}
+	for {
+		input, ok := promptShellLine(reader, fmt.Sprintf("Lesson [%s]: ", choices[0].Value))
+		if !ok {
+			return "", false
+		}
+		lesson, ok := parseShellLessonChoice(mode, input)
+		if ok {
+			return lesson, true
+		}
+		fmt.Println("Enter a lesson number or name from the list.")
+	}
+}
+
+func promptShellInt(reader *bufio.Reader, label string, defaultValue, minValue, maxValue int) (int, bool) {
+	for {
+		input, ok := promptShellLine(reader, fmt.Sprintf("%s [%d]: ", label, defaultValue))
+		if !ok {
+			return 0, false
+		}
+		if input == "" {
+			return defaultValue, true
+		}
+		value, err := strconv.Atoi(input)
+		if err != nil || value < minValue || value > maxValue {
+			fmt.Printf("Enter a whole number from %d to %d.\n", minValue, maxValue)
+			continue
+		}
+		return value, true
+	}
+}
+
+func promptShellYesNo(reader *bufio.Reader, label string, defaultValue bool) (bool, bool) {
+	defaultText := "Y/n"
+	if !defaultValue {
+		defaultText = "y/N"
+	}
+	for {
+		input, ok := promptShellLine(reader, fmt.Sprintf("%s [%s]: ", label, defaultText))
+		if !ok {
+			return false, false
+		}
+		if input == "" {
+			return defaultValue, true
+		}
+		switch strings.ToLower(input) {
+		case "y", "yes":
+			return true, true
+		case "n", "no":
+			return false, true
+		default:
+			fmt.Println("Enter y or n.")
+		}
+	}
+}
+
+func promptShellLine(reader *bufio.Reader, prompt string) (string, bool) {
+	fmt.Print(prompt)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", false
+	}
+	input := strings.TrimSpace(line)
+	if strings.EqualFold(input, "q") || strings.EqualFold(input, "quit") || strings.EqualFold(input, "exit") {
+		return "", false
+	}
+	return input, true
+}
+
+func parseShellModeChoice(input string) (Mode, bool) {
+	input = normalizeShellChoice(input)
+	if input == "" {
+		return ModeRelationships, true
+	}
+	if n, err := strconv.Atoi(input); err == nil {
+		choices := shellModeChoices()
+		if n >= 1 && n <= len(choices) {
+			return choices[n-1].Mode, true
+		}
+		return "", false
+	}
+	for _, choice := range shellModeChoices() {
+		if normalizeShellChoice(string(choice.Mode)) == input || normalizeShellChoice(choice.Label) == input {
+			return choice.Mode, true
+		}
+		for _, alias := range choice.Aliases {
+			if normalizeShellChoice(alias) == input {
+				return choice.Mode, true
+			}
+		}
+	}
+	return "", false
+}
+
+func parseShellLessonChoice(mode Mode, input string) (string, bool) {
+	choices := shellLessonChoices(mode)
+	if len(choices) == 0 {
+		return "", input == ""
+	}
+	input = normalizeShellChoice(input)
+	if input == "" {
+		return choices[0].Value, true
+	}
+	if n, err := strconv.Atoi(input); err == nil {
+		if n >= 1 && n <= len(choices) {
+			return choices[n-1].Value, true
+		}
+		return "", false
+	}
+	for _, choice := range choices {
+		if normalizeShellChoice(choice.Value) == input || normalizeShellChoice(choice.Label) == input {
+			return choice.Value, true
+		}
+	}
+	return "", false
+}
+
+func normalizeShellChoice(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	value = strings.Join(strings.Fields(value), "-")
+	return value
+}
+
+func shellModeUsesArithmeticRange(mode Mode) bool {
+	return mode == ModeArithmetic || mode == ModeMixed
+}
+
+func shellModeHasLessons(mode Mode) bool {
+	return len(shellLessonChoices(mode)) > 0
+}
+
+func shellModeChoices() []shellModeChoice {
+	return []shellModeChoice{
+		{Mode: ModeArithmetic, Label: "arithmetic", Description: "multiplication/division facts", Aliases: []string{"facts", "multiplication", "division"}},
+		{Mode: ModeFractions, Label: "fractions", Description: "fractions, decimals, and parts-of-a-whole", Aliases: []string{"fraction-relations", "fraction-relationships"}},
+		{Mode: ModePercentages, Label: "percentages", Description: "percent, decimal, and fraction equivalence", Aliases: []string{"percents"}},
+		{Mode: ModePercentRelations, Label: "percent-relations", Description: "a% of b = b% of a", Aliases: []string{"percentage-relations", "percentage-relationships", "percentrelationships", "percentrelations"}},
+		{Mode: ModeUnitCircle, Label: "unit-circle", Description: "staged unit-circle relationships", Aliases: []string{"unitcircle", "circle", "trig", "trigonometry"}},
+		{Mode: ModeExponentsLogs, Label: "exponents-logs", Description: "root, exponent, and log relationships", Aliases: []string{"exponents", "logs", "log-relations", "root-exponent-log", "roots-exponents-logs"}},
+		{Mode: ModeAlgebraIdentities, Label: "algebra-identities", Description: "algebra patterns and transformations", Aliases: []string{"identities", "algebra-patterns"}},
+		{Mode: ModeTriangles, Label: "triangles", Description: "triangle relationships for trig foundations", Aliases: []string{"geometry-triangles", "trig-triangles"}},
+		{Mode: ModeRelationships, Label: "relationships", Description: "all conceptual decks without arithmetic", Aliases: []string{"relations", "math-relations", "math-relationships", "relationship-trainer"}},
+		{Mode: ModeMixed, Label: "mixed", Description: "everything, including arithmetic"},
+	}
+}
+
+func shellLessonChoices(mode Mode) []shellLessonChoice {
+	switch mode {
+	case ModeUnitCircle:
+		return []shellLessonChoice{
+			{Value: string(UnitCircleLessonConcepts), Label: "concepts", Description: "(cos, sin), sine-y, cosine-x, tangent-y/x"},
+			{Value: string(UnitCircleLessonQuadrants), Label: "quadrants", Description: "quadrants and signs"},
+			{Value: string(UnitCircleLessonReferenceAngles), Label: "reference-angles", Description: "reference angles and quadrants"},
+			{Value: string(UnitCircleLessonReferenceValues), Label: "reference-values", Description: "30/45/60 first-quadrant values"},
+			{Value: string(UnitCircleLessonRadians), Label: "radians", Description: "degree/radian conversions"},
+			{Value: string(UnitCircleLessonAssemble), Label: "assemble", Description: "reference angle plus sign for sin/cos"},
+			{Value: string(UnitCircleLessonTangent), Label: "tangent", Description: "tan ratios, values, and undefined cases"},
+			{Value: string(UnitCircleLessonReciprocals), Label: "reciprocals", Description: "sec, csc, and cot relationships"},
+			{Value: string(UnitCircleLessonMixed), Label: "mixed", Description: "full unit-circle review"},
+		}
+	case ModeAlgebraIdentities:
+		return []shellLessonChoice{
+			{Value: string(AlgebraIdentityLessonConcepts), Label: "concepts", Description: "identity, expand, factor, equivalent expression"},
+			{Value: string(AlgebraIdentityLessonExpand), Label: "expand", Description: "forward expansion patterns"},
+			{Value: string(AlgebraIdentityLessonFactor), Label: "factor", Description: "reverse factoring patterns"},
+			{Value: string(AlgebraIdentityLessonRecognize), Label: "recognize", Description: "name the matching pattern"},
+			{Value: string(AlgebraIdentityLessonMixed), Label: "mixed", Description: "full algebra identity review"},
+		}
+	case ModeTriangles:
+		return []shellLessonChoice{
+			{Value: string(TriangleLessonConcepts), Label: "concepts", Description: "right angle, hypotenuse, opposite, adjacent"},
+			{Value: string(TriangleLessonAngleSum), Label: "angle-sum", Description: "180 degree sum and missing angles"},
+			{Value: string(TriangleLessonPythagorean), Label: "pythagorean", Description: "a^2+b^2=c^2 and missing sides"},
+			{Value: string(TriangleLessonSpecial), Label: "special-right", Description: "30-60-90 and 45-45-90 ratios"},
+			{Value: string(TriangleLessonSOHCAHTOA), Label: "sohcahtoa", Description: "sin, cos, tan side ratios"},
+			{Value: string(TriangleLessonMixed), Label: "mixed", Description: "full triangle review"},
+		}
+	default:
+		return nil
+	}
+}
+
+func printShellSessionSummary(mode Mode, lessons LessonSelection, minValue, maxValue, minutes int) {
+	fmt.Printf("Starting %d minute %s session", minutes, mode)
+	switch mode {
+	case ModeUnitCircle:
+		fmt.Printf(" (%s lesson)", lessons.UnitCircle)
+	case ModeAlgebraIdentities:
+		fmt.Printf(" (%s lesson)", lessons.AlgebraIdentities)
+	case ModeTriangles:
+		fmt.Printf(" (%s lesson)", lessons.Triangles)
+	}
+	if shellModeUsesArithmeticRange(mode) {
+		fmt.Printf(" with arithmetic range %d-%d", minValue, maxValue)
+	}
+	fmt.Println(".")
 }
 
 func webCmd(args []string) {

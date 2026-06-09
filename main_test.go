@@ -91,6 +91,66 @@ func TestRelationshipModeAliases(t *testing.T) {
 	}
 }
 
+func TestInteractiveShellModeChoices(t *testing.T) {
+	cases := map[string]Mode{
+		"":                     ModeRelationships,
+		"1":                    ModeArithmetic,
+		"5":                    ModeUnitCircle,
+		"unit circle":          ModeUnitCircle,
+		"root-exponent-log":    ModeExponentsLogs,
+		"algebra identities":   ModeAlgebraIdentities,
+		"geometry-triangles":   ModeTriangles,
+		"relationship-trainer": ModeRelationships,
+	}
+	for input, want := range cases {
+		got, ok := parseShellModeChoice(input)
+		if !ok {
+			t.Fatalf("parseShellModeChoice(%q) was not recognized", input)
+		}
+		if got != want {
+			t.Fatalf("parseShellModeChoice(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if _, ok := parseShellModeChoice("999"); ok {
+		t.Fatal("out-of-range numeric mode should not be recognized")
+	}
+	if _, ok := parseShellModeChoice("not-a-mode"); ok {
+		t.Fatal("unknown mode should not be recognized")
+	}
+}
+
+func TestInteractiveShellLessonChoices(t *testing.T) {
+	cases := []struct {
+		mode  Mode
+		input string
+		want  string
+	}{
+		{mode: ModeUnitCircle, input: "", want: string(UnitCircleLessonConcepts)},
+		{mode: ModeUnitCircle, input: "2", want: string(UnitCircleLessonQuadrants)},
+		{mode: ModeUnitCircle, input: "reference values", want: string(UnitCircleLessonReferenceValues)},
+		{mode: ModeAlgebraIdentities, input: "", want: string(AlgebraIdentityLessonConcepts)},
+		{mode: ModeAlgebraIdentities, input: "factor", want: string(AlgebraIdentityLessonFactor)},
+		{mode: ModeTriangles, input: "", want: string(TriangleLessonConcepts)},
+		{mode: ModeTriangles, input: "special right", want: string(TriangleLessonSpecial)},
+		{mode: ModeTriangles, input: "5", want: string(TriangleLessonSOHCAHTOA)},
+	}
+	for _, tc := range cases {
+		got, ok := parseShellLessonChoice(tc.mode, tc.input)
+		if !ok {
+			t.Fatalf("parseShellLessonChoice(%q, %q) was not recognized", tc.mode, tc.input)
+		}
+		if got != tc.want {
+			t.Fatalf("parseShellLessonChoice(%q, %q) = %q, want %q", tc.mode, tc.input, got, tc.want)
+		}
+	}
+	if _, ok := parseShellLessonChoice(ModeFractions, "anything"); ok {
+		t.Fatal("non-lesson mode should not accept a lesson")
+	}
+	if _, ok := parseShellLessonChoice(ModeTriangles, "999"); ok {
+		t.Fatal("out-of-range lesson number should not be recognized")
+	}
+}
+
 func TestRelationshipsModeExcludesArithmeticFacts(t *testing.T) {
 	facts := BuildFacts(2, 12, ModeRelationships)
 	byID := map[string]Fact{}

@@ -10,6 +10,14 @@ go run . -minutes 10
 
 The CLI times each answer, records misses, and prints the current weak facts when the session ends.
 
+Interactive shell:
+
+```sh
+go run . shell
+```
+
+The shell shows the available modes, lesson options for staged modes, arithmetic range when needed, and session length before starting practice. It returns to the menu after each session so you can switch modes without restarting.
+
 Fraction/decimal mode:
 
 ```sh
